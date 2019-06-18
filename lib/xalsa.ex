@@ -1,6 +1,9 @@
 defmodule Xalsa do
   @moduledoc """
-  Documentation for Xalsa.
+  The Xalsa module implements the API.
+  The client may send any number of frames as a binary array of 32 bit floats and may
+  optionally receive back a notification in form of a :ready4more message 5-10 ms 
+  before all frames are consumed by the ALSA driver.
   """
 
   @typedoc """
@@ -9,6 +12,12 @@ defmodule Xalsa do
   """
   @type rates() :: 44100 | 48000 | 96000 | 192000
 
+  @doc """
+  Send frames in a binary array of Frame:32/float-native.
+  If the `notify` flag is true a :ready4more message will be sent to the
+  process in the `from` argument when the process frames are due to be consumed
+  within 5-10 ms. This so that the process may synthesize/produce more frames.
+  """
   @spec send_frames(
           frames :: binary(),
           channel :: pos_integer(),
@@ -23,7 +32,7 @@ defmodule Xalsa do
   end
 
   @doc """
-  Wait until ready4more notification is sent from `xalsa` server.
+  The client will wait until :ready4more notification is sent from `xalsa` server.
   """
   @spec wait_ready4more() :: :ok
   def wait_ready4more() do
@@ -33,7 +42,7 @@ defmodule Xalsa do
   end
 
   @doc """
-  Flush any ready4more messages from the `xalsa` server in input queue.
+  Flush any :ready4more messages from the `xalsa` server in input queue.
   Returns true if there were any.
   """
   @spec flush_ready4more() :: boolean()
@@ -47,16 +56,30 @@ defmodule Xalsa do
     end
   end
 
+  @doc """
+  Return the number of frames that the ALSA driver consumes per callback cycle.
+  """
   @spec period_size() :: pos_integer()
   def period_size(), do: :xalsa_manager.period_size()
 
+  @doc "The sample rate, number of frames per second"
   @spec rate() :: rates()
   def rate(), do: :xalsa_manager.rate()
 
+  @doc """
+  Lists the PCM names and their number of channels respectively.
+
+  ## Example
+
+      iex> Xalsa.pcms()
+      ["plughw:1,0": 2]
+
+  """
   @spec pcms() :: list()
   def pcms(), do: :xalsa_manager.pcms()
 
-  @spec no_of_channels() :: 1..32
+  @doc "Total number of channels for all PCM devices together."
+  @spec no_of_channels() :: pos_integer()
   def no_of_channels, do: :xalsa_manager.no_of_channels()
 
   @doc """
