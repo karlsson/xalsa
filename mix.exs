@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Compile.XalsaNif do
   def run(_args) do
     {result, _errcode} = System.cmd("make", [], cd: "c_src", stderr_to_stdout: true)
+    Mix.Project.build_structure()
     IO.binwrite(result)
   end
 
