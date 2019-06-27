@@ -214,7 +214,7 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
 static ERL_NIF_TERM pcm_writei(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   ErlNifBinary bin;
-  unsigned size; // No of frames (per channel)
+  unsigned int size; // No of frames (per channel)
   int err;
 
   snd_pcm_t** handle_p;
@@ -237,8 +237,8 @@ static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
   ErlNifBinary bin;
   ERL_NIF_TERM buf_list;
 
-  unsigned size; // No of frames (per channel)
-  unsigned channels;
+  unsigned int size; // No of frames (per channel)
+  unsigned int channels;
   int err;
   snd_pcm_t** handle_p;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
@@ -251,7 +251,7 @@ static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
   }
 
   void** bufs = enif_alloc(sizeof(void*) * channels);
-  unsigned channel = 0;
+  unsigned int channel = 0;
   ERL_NIF_TERM head, tail;
   while(channel < channels){
     if(!enif_get_list_cell(env, buf_list, &head, &tail)){
@@ -349,7 +349,7 @@ static ERL_NIF_TERM pcm_add_async_handler(ErlNifEnv* env, int argc, const ERL_NI
 }
 
 static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]){
-  unsigned i, size; // No of frames
+  unsigned int i, size; // No of frames
   ERL_NIF_TERM key, value, map_out;
   const ERL_NIF_TERM * tuple_array;
   ErlNifMapIterator iter;
@@ -363,7 +363,7 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_badarg(env);
   }
 
-  unsigned bytesize = size * FRAME_SIZE;
+  unsigned int bytesize = size * FRAME_SIZE;
 
   ERL_NIF_TERM buf_term;
   FRAME_TYPE *buf = (FRAME_TYPE *) enif_make_new_binary(env, bytesize, &buf_term);
@@ -374,7 +374,7 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
   map_out = enif_make_new_map(env);
 
   FRAME_TYPE* framesp;
-  unsigned noframes;
+  unsigned int noframes;
   int arity, notify_flag;
   ERL_NIF_TERM new_binary;
   while (enif_map_iterator_get_pair(env, &iter, &key, &value)) {
@@ -390,10 +390,7 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 
     if(i < noframes) { // bin.data larger than size
-      unsigned newsize = bin.size - bytesize;
-      // unsigned char * newbin_data =
-      // enif_make_new_binary(env, newsize, &new_binary);
-      // memcpy(newbin_data, &bin.data[bytesize], newsize);
+      unsigned int newsize = bin.size - bytesize;
       new_binary =
 	enif_make_sub_binary(env,
 			     tuple_array[1],
@@ -423,6 +420,29 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
   return enif_make_tuple2(env, buf_term, map_out);
 }
 
+static ERL_NIF_TERM float_list_to_binary(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]){
+  ERL_NIF_TERM float_list, new_binary, head, tail;
+  unsigned int list_length, bin_size;
+  double frame;
+  FRAME_TYPE * float_data;
+
+  float_list = argv[0];
+  if(!enif_get_list_length(env, float_list, &list_length)){
+    return enif_make_badarg(env);
+  }
+
+  bin_size = list_length * FRAME_SIZE;
+  float_data = (FRAME_TYPE *) enif_make_new_binary(env, bin_size, &new_binary);
+  while(enif_get_list_cell(env, float_list, &head, &tail)){
+    if(!enif_get_double(env, head, &frame)) {
+      return enif_make_badarg(env);
+    }
+    *float_data++ = (FRAME_TYPE) frame;
+    float_list = tail;
+  }
+  return new_binary;
+}
+
 static ErlNifFunc nif_funcs[] = {
   {"open_handle", 1, pcm_open_handle, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"close_handle", 1, pcm_close_handle},
@@ -435,7 +455,8 @@ static ErlNifFunc nif_funcs[] = {
   {"recover", 2, pcm_recover},
   {"avail_update", 1, pcm_avail_update},
   {"add_async_handler", 2, pcm_add_async_handler},
-  {"sum_map", 2, sum_map}
+  {"sum_map", 2, sum_map},
+  {"float_list_to_binary", 1, float_list_to_binary}
 };
 
 static int open_pcm_resource_type(ErlNifEnv* env)

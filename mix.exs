@@ -27,8 +27,8 @@ defmodule Xalsa.MixProject do
       name: "Xalsa",
       source_url: "https://github.com/karlsson/xalsa",
       docs: [
-	main: "Xalsa",
-	extras: ["README.md"]
+        main: "Xalsa",
+        extras: ["README.md"]
       ]
     ]
   end

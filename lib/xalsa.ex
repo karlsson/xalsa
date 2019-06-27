@@ -10,7 +10,7 @@ defmodule Xalsa do
   The sample rate is set in the application environment
   (config file for the application).
   """
-  @type rates() :: 44100 | 48000 | 96000 | 192000
+  @type rates() :: 44100 | 48000 | 96000 | 192_000
 
   @doc """
   Send frames in a binary array of Frame:32/float-native.
@@ -102,7 +102,7 @@ defmodule Xalsa do
   @doc "Convert a list of (Erlang) floats to a binary of 32 bit (C) floats"
   @spec float_list_to_binary([float()]) :: binary()
   def float_list_to_binary(fl) do
-    :xalsa_pcm.conv_float_list_to_binary(fl)
+    :xalsa_pcm.float_list_to_binary(fl)
   end
 
   @spec boolean_to_integer(boolean()) :: 0 | 1
