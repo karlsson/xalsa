@@ -25,9 +25,9 @@ use Mix.Config
 # numbers allocated after the first card. So if two cards with 2 channels
 # each are configured the first card will get channel no 1 and 2, second will
 # get 3 and 4.
-config :xalsa,
-  rate: 96000,
-  pcms: ["plughw:1,0": 2]
+# config :xalsa,
+#   rate: 98000,
+#   pcms: ["plughw:1,0": 2]
 
 # You can also configure a third-party app:
 #

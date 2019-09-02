@@ -1,9 +1,12 @@
 defmodule Xalsa do
   @moduledoc """
-  The Xalsa module implements the API.
+  Elixir ALSA connector. The Xalsa module implements the API.
   The client may send any number of frames as a binary array of 32 bit floats and may
   optionally receive back a notification in form of a :ready4more message 5-10 ms 
   before all frames are consumed by the ALSA driver.
+
+  The :xalsa application needs to be started before calling the API. Also check the
+  config/config.exs file on how to configure PCM devices for xalsa.
   """
 
   @typedoc """
@@ -13,7 +16,7 @@ defmodule Xalsa do
   @type rates() :: 44100 | 48000 | 96000 | 192_000
 
   @doc """
-  Send frames in a binary array of Frame:32/float-native.
+  Send frames in a binary array of frame:32/float-native.
   If the `notify` flag is true a :ready4more message will be sent to the
   process in the `from` argument when the process frames are due to be consumed
   within 5-10 ms. This so that the process may synthesize/produce more frames.

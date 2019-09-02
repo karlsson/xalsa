@@ -3,7 +3,7 @@
 **Elixir ALSA Connector**
 
 Actually most code is (currently) in Erlang but with an API in Elixir as frontend.
-[ALSA](https://www.alsa-project.org/wiki/Main_Page) stands for Advanced Linux Sound Architecture. 
+[ALSA](https://www.alsa-project.org/wiki/Main_Page) stands for Advanced Linux Sound Architecture.
 Xalsa uses NIFs to connect to the ALSA library.
 
 The idea is to create some base for experimenting with sound synthesis in Elixir/Erlang using the process concept as central part in the architecture.
@@ -22,9 +22,13 @@ The frames are to be in a binary array of 32 bit floats for the C api. The Xalsa
 - mix deps.get
 - mix compile. In order to compile the c code you will need some alsa development libraries to be installed (libasound2-dev).
 
+If using from own application, append line: `{:xalsa, "~> 0.1.0"}` to
+your dependency list.
+
+
 ## Configuration
 
-The config/config.exs file has comments on how to configure your PCM devices, which can be a bit tricky.
+The config/config.exs file has comments on how to configure your PCM devices, which can be a bit tricky. Default setting of application environment is in mix.exs.
 
 ## Running
 
