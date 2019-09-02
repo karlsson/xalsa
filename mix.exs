@@ -60,7 +60,7 @@ defmodule Xalsa.MixProject do
   defp package do
     [
       maintainers: ["Mikael Karlsson"],
-      licences: ["Apache 2.0"],
+      licenses: ["Apache-2.0"],
       links: %{"GitHub" => "https://github.com/karlsson/xalsa"}
     ]
   end
