@@ -27,7 +27,7 @@ use Mix.Config
 # get 3 and 4.
 # config :xalsa,
 #   rate: 98000,
-#   pcms: ["plughw:1,0": 2]
+#   pcms: ["plughw:PCH,0": 2]
 
 # You can also configure a third-party app:
 #

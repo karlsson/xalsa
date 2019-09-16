@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Compile.XalsaNif do
     IO.binwrite(result)
   end
 
-  def clean(_args) do
+  def clean() do
     {result, _errcode} = System.cmd("make", ["clean"], cd: "c_src", stderr_to_stdout: true)
     IO.binwrite(result)
   end
@@ -41,7 +41,7 @@ defmodule Xalsa.MixProject do
       mod: {:xalsa_app, []},
       env: [
 	rate: 96000,
-	pcms: ["plughw:1,0": 2]
+	pcms: ["plughw:PCH,0": 2]
       ],
     ]
   end
