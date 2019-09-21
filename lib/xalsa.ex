@@ -102,6 +102,18 @@ defmodule Xalsa do
   @spec clear_max_mix_time() :: :ok
   def clear_max_mix_time(), do: :xalsa_manager.clear_max_mix_time()
 
+  @doc """
+  The maximum map size for output mixer, for all started pcm cards,
+  since application start or last reset. Indicates how many processes
+  that concurrently are queueing frames to be output.
+  """
+  @spec max_map_size() :: [pos_integer()]
+  def max_map_size(), do: :xalsa_manager.max_map_size()
+
+  @doc "Reset the max prepare time gauges to 0"
+  @spec clear_max_map_size() :: :ok
+  def clear_max_map_size(), do: :xalsa_manager.clear_max_map_size()
+
   @doc "Convert a list of (Erlang) floats to a binary of 32 bit (C) floats"
   @spec float_list_to_binary([float()]) :: binary()
   def float_list_to_binary(fl) do

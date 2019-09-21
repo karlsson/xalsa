@@ -18,6 +18,8 @@
 	 no_of_channels/0,
 	 max_mix_time/0,
 	 clear_max_mix_time/0,
+	 max_map_size/0,
+	 clear_max_map_size/0,
 	 get_id/1]).
 
 %% gen_server callbacks
@@ -65,6 +67,10 @@ max_mix_time() ->
     gen_server:call(?SERVER, ?FUNCTION_NAME).
 clear_max_mix_time() ->
     gen_server:call(?SERVER, ?FUNCTION_NAME).
+max_map_size() ->
+    gen_server:call(?SERVER, ?FUNCTION_NAME).
+clear_max_map_size() ->
+    gen_server:call(?SERVER, ?FUNCTION_NAME).
 get_id(Channel) ->
     gen_server:call(?SERVER, {?FUNCTION_NAME, Channel}).
 
@@ -99,7 +105,7 @@ init([]) ->
 	    44100 -> 224;
 	    48000 -> 240;
 	    96000 -> 480;
-        192000-> 960
+	    192000-> 960
 	end,
     {ok, #state{conf_rate = Rate, period_size = PeriodSize}, {continue,[]}}.
 
@@ -133,6 +139,10 @@ handle_call(max_mix_time, _From, State) ->
     {reply, max_mix_time(State#state.channels), State};
 handle_call(clear_max_mix_time, _From, State) ->
     {reply, clear_max_mix_time(State#state.channels), State};
+handle_call(max_map_size, _From, State) ->
+    {reply, max_map_size(State#state.channels), State};
+handle_call(clear_max_map_size, _From, State) ->
+    {reply, clear_max_map_size(State#state.channels), State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -261,4 +271,15 @@ clear_max_mix_time([{Id,_}|T]) ->
     gen_server:call(Id,clear_max_mix_time),
     clear_max_mix_time(T);
 clear_max_mix_time([]) ->
+    ok.
+
+max_map_size([{Id,_}|T]) ->
+    [gen_server:call(Id,max_map_size)|max_map_size(T)];
+max_map_size([]) ->
+    [].
+
+clear_max_map_size([{Id,_}|T]) ->
+    gen_server:call(Id,clear_max_map_size),
+    clear_max_map_size(T);
+clear_max_map_size([]) ->
     ok.

@@ -20,15 +20,16 @@
 
 -record(state,
         {
-	 name :: atom(),
+         name :: atom(),
          handle :: reference(),
          rate :: pos_integer(),
          no_of_channels :: pos_integer(),
-	 buffer_size :: pos_integer(),
-	 period_size :: pos_integer(),
-	 period_time :: pos_integer(),
+         buffer_size :: pos_integer(),
+         period_size :: pos_integer(),
+         period_time :: pos_integer(),
          buffers :: tuple(), % One buffer per channel
-         dtime = 0 :: pos_integer()
+         dtime = 0 :: pos_integer(),
+         max_map_size = 0 :: pos_integer()
         }).
 
 %%%===================================================================
@@ -75,10 +76,10 @@ init(#{name := AtomName, rate := Rate,
     Bufs = erlang:make_tuple(Channels, #{}),
     {ok,
      #state{name = AtomName, handle = Handle,
-	    rate = Rate, no_of_channels = Channels,
-	    buffer_size = BufferSize, period_size = PeriodSize,
-	    period_time = PeriodTime, buffers = Bufs},
-    {continue, {Handle, Channels, BufferSize}}}.
+            rate = Rate, no_of_channels = Channels,
+            buffer_size = BufferSize, period_size = PeriodSize,
+            period_time = PeriodTime, buffers = Bufs},
+     {continue, {Handle, Channels, PeriodSize}}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -97,8 +98,12 @@ init(#{name := AtomName, rate := Rate,
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call(max_mix_time, _From, State) ->
     {reply, State#state.dtime, State};
+handle_call(max_map_size, _From, State) ->
+    {reply, State#state.max_map_size, State};
 handle_call(clear_max_mix_time, _From, State) ->
     {reply, ok, State#state{dtime = 0}};
+handle_call(clear_max_map_size, _From, State) ->
+    {reply, ok, State#state{max_map_size = 0}};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -124,17 +129,17 @@ handle_cast(_Request, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_continue(Continue :: term(), State :: term()) ->
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: term(), NewState :: term()}.
-handle_continue({Handle, Channels, BufferSize}, State) ->
+                             {noreply, NewState :: term()} |
+                             {noreply, NewState :: term(), Timeout :: timeout()} |
+                             {noreply, NewState :: term(), hibernate} |
+                             {stop, Reason :: term(), NewState :: term()}.
+handle_continue({Handle, Channels, PeriodSize}, State) ->
     process_flag(priority, high),
     0 = xalsa_pcm:add_async_handler(Handle, self()),
     0 = xalsa_pcm:prepare(Handle),
-    Buf = lists:duplicate(BufferSize, 0.0),
-    PrepBufs = lists:duplicate(Channels, Buf),
-    xalsa_pcm:writel(Handle, PrepBufs, BufferSize),
+    {_NewBufs, Frames} = prepare_bufs(State),
+    xalsa_pcm:writen(Handle, Frames, PeriodSize),
+    xalsa_pcm:writen(Handle, Frames, PeriodSize),
     0 = xalsa_pcm:start(Handle),
     {noreply, State}.
 
@@ -154,54 +159,58 @@ handle_info(pcm_ready4write,
                            period_time = PT, dtime = Dtime}) ->
     T1 = sysnow(),
     {NewBufs, Frames} = prepare_bufs(State),
-    case xalsa_pcm:errno(ErrNo = xalsa_pcm:writen(Handle, Frames, Size)) of
-	Size ->
-	    ok;
-	eagain ->
-	    xalsa_pcm:writen(Handle, Frames, Size);
-	epipe ->
-	    logger:warning("~p - ~p epipe",[?MODULE, Name]),
-	    xalsa_pcm:recover(Handle, ErrNo),
-	    xalsa_pcm:writen(Handle, Frames, Size),
-	    xalsa_pcm:writen(Handle, Frames, Size);
-	A ->
-	    logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
+    ErrNo = xalsa_pcm:writen(Handle, Frames, Size),
+    case xalsa_pcm:errno(ErrNo) of
+        Size ->
+            ok;
+        eagain ->
+            xalsa_pcm:writen(Handle, Frames, Size);
+        epipe ->
+            logger:warning("~p - ~p epipe",[?MODULE, Name]),
+            xalsa_pcm:recover(Handle, ErrNo),
+            xalsa_pcm:writen(Handle, Frames, Size),
+            xalsa_pcm:writen(Handle, Frames, Size);
+        A ->
+            logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
     end,
+    garbage_collect(),
     T2 = sysnow(),
     {noreply, State#state{buffers = NewBufs, dtime = max(Dtime,T2 - T1)}, 2 * PT};
 
-handle_info({frames,{Pid, Channel, PidBuf, Notify}}, State = #state{buffers = Bufs}) when
+handle_info({frames,{Pid, Channel, PidBuf, Notify}},
+	    State = #state{buffers = Bufs, max_map_size = MSize}) when
       is_pid(Pid), Channel =< State#state.no_of_channels ->
     OldBuf = element(Channel, Bufs),
     NewBuf =
 	case OldBuf of
-	    #{Pid := {_, Frames}} when is_binary(Frames)->
-		OldBuf#{Pid := {Notify, <<Frames/binary, PidBuf/binary>>}};
-	    OldBuf ->
-		 OldBuf#{Pid => {Notify, PidBuf}}
-	end,
+            #{Pid := {_, Frames}} when is_binary(Frames)->
+                OldBuf#{Pid := {Notify, <<Frames/binary, PidBuf/binary>>}};
+            OldBuf ->
+                OldBuf#{Pid => {Notify, PidBuf}}
+        end,
     NewBufs = setelement(Channel, Bufs, NewBuf),
-    {noreply, State#state{buffers = NewBufs}};
+    {noreply, State#state{buffers = NewBufs,
+                          max_map_size = max(MSize, maps:size(NewBuf))}};
 
 handle_info(timeout, State = #state{handle = Handle, period_size = Size,
-                                           period_time = PT}) ->
+                                    period_time = PT}) ->
     Avail = xalsa_pcm:avail_update(Handle),
     logger:warning("~p, Timout waiting for callback",[?MODULE]),
     NewBufs =
-	if
-	    Avail >= Size ->
-		{NewBufs1, Frames} = prepare_bufs(State),
-		xalsa_pcm:writen(Handle, Frames, Size),
-		if
-		    Avail - Size >= Size ->
-			xalsa_pcm:writen(Handle, Frames, Size);
-		    true ->
-			ok
-		end,
-		NewBufs1;
-	    true ->
-		State#state.buffers
-	end,
+        if
+            Avail >= Size ->
+                {NewBufs1, Frames} = prepare_bufs(State),
+                xalsa_pcm:writen(Handle, Frames, Size),
+                if
+                    Avail - Size >= Size ->
+                        xalsa_pcm:writen(Handle, Frames, Size);
+                    true ->
+                        ok
+                end,
+                NewBufs1;
+            true ->
+                State#state.buffers
+        end,
     {noreply, State#state{buffers = NewBufs}, 2 * PT};
 
 handle_info(_Info, State) ->
@@ -218,8 +227,9 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{name = Name, handle = Handle, dtime = Dtime}) ->
-    logger:info("~p - Closing ~p, max mix time: ~p µs",[?MODULE, Name, Dtime]),
+terminate(_Reason, #state{name = Name, handle = Handle,
+                          dtime = Dtime, max_map_size = MSize}) ->
+    logger:info("~p - Closing ~p, max mix time: ~p µs, max_map_size: ~p",[?MODULE, Name, Dtime, MSize]),
     xalsa_pcm:close_handle(Handle).
 
 %%--------------------------------------------------------------------
@@ -252,7 +262,7 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 prepare_bufs(#state{period_size = Size, no_of_channels = Channels,
-		   buffers = Bufs}) when Size > 0 ->
+                    buffers = Bufs}) when Size > 0 ->
     prepare_bufs(1, Size, Bufs, Channels, []).
 
 prepare_bufs(Channel, Size, Bufs, Channels, Acc) when Channel =< Channels ->
