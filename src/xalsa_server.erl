@@ -79,7 +79,7 @@ init(#{name := AtomName, rate := Rate,
             rate = Rate, no_of_channels = Channels,
             buffer_size = BufferSize, period_size = PeriodSize,
             period_time = PeriodTime, buffers = Bufs},
-     {continue, {Handle, Channels, PeriodSize}}}.
+     {continue, {Handle, PeriodSize}}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -133,7 +133,7 @@ handle_cast(_Request, State) ->
                              {noreply, NewState :: term(), Timeout :: timeout()} |
                              {noreply, NewState :: term(), hibernate} |
                              {stop, Reason :: term(), NewState :: term()}.
-handle_continue({Handle, Channels, PeriodSize}, State) ->
+handle_continue({Handle, PeriodSize}, State) ->
     process_flag(priority, high),
     0 = xalsa_pcm:add_async_handler(Handle, self()),
     0 = xalsa_pcm:prepare(Handle),
@@ -175,7 +175,7 @@ handle_info(pcm_ready4write,
     end,
     garbage_collect(),
     T2 = sysnow(),
-    {noreply, State#state{buffers = NewBufs, dtime = max(Dtime,T2 - T1)}, 2 * PT};
+    {noreply, State#state{buffers = NewBufs, dtime = max(Dtime,T2 - T1)}, 4 * PT};
 
 handle_info({frames,{Pid, Channel, PidBuf, Notify}},
 	    State = #state{buffers = Bufs, max_map_size = MSize}) when
@@ -211,7 +211,7 @@ handle_info(timeout, State = #state{handle = Handle, period_size = Size,
             true ->
                 State#state.buffers
         end,
-    {noreply, State#state{buffers = NewBufs}, 2 * PT};
+    {noreply, State#state{buffers = NewBufs}, 4 * PT};
 
 handle_info(_Info, State) ->
     {noreply, State}.

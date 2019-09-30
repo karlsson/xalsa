@@ -391,6 +391,15 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     if(i < noframes) { // bin.data larger than size
       unsigned int newsize = bin.size - bytesize;
+      if(notify_flag && newsize <= bytesize){
+	ErlNifPid pid;
+	if(enif_get_local_pid(env, key, &pid)) {
+	  ErlNifEnv* msg_env = enif_alloc_env();
+	  enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
+	  enif_free_env(msg_env);
+	}
+        notify_flag = 0;
+      }
       new_binary =
 	enif_make_sub_binary(env,
 			     tuple_array[1],
@@ -400,16 +409,14 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
       // insert it into the map along with its label converted as atom
       enif_make_map_put(env, map_out,
 			key,
-			enif_make_tuple2(env, tuple_array[0], new_binary),
+			enif_make_tuple2(env, enif_make_int(env, notify_flag), new_binary),
 			&map_out);
-
-      if(notify_flag && newsize <= bytesize){
-	ErlNifPid pid;
-	if(enif_get_local_pid(env, key, &pid)) {
-	  ErlNifEnv* msg_env = enif_alloc_env();
-	  enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
-	  enif_free_env(msg_env);
-	}
+    } else if(notify_flag){
+      ErlNifPid pid;
+      if(enif_get_local_pid(env, key, &pid)) {
+        ErlNifEnv* msg_env = enif_alloc_env();
+        enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
+        enif_free_env(msg_env);
       }
     }
     enif_map_iterator_next(env, &iter);
