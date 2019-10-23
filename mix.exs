@@ -40,7 +40,7 @@ defmodule Xalsa.MixProject do
       extra_applications: [:logger],
       mod: {:xalsa_app, []},
       env: [
-	rate: 96000,
+	rate: 44100,
 	pcms: ["plughw:PCH,0": 2]
       ],
     ]
