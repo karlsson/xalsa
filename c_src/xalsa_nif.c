@@ -27,16 +27,13 @@ static int set_hwparams(snd_pcm_t *handle,
                         unsigned int *rate, unsigned int *channels,
                         snd_pcm_uframes_t *buffer_size,
                         snd_pcm_uframes_t *period_size){
-  int err; //, dir;
-  // unsigned int buffer_time = 10000;            /* ring buffer length in us */
-  // unsigned int period_time = 5000;            /* period time in us */
+  int err;
   /*
-     buffer_size = 2 * period_size
      rate     period_size
-     44100    224
-     48000    240
-     96000    480
-     192000   960
+     44100    256
+     48000    256
+     96000    512
+     192000   1024
   */
   snd_pcm_hw_params_t *params;
   snd_pcm_hw_params_malloc(&params);
@@ -78,28 +75,16 @@ static int set_hwparams(snd_pcm_t *handle,
     return err;
   }
 
-  /* set the buffer time */
-  /* err = snd_pcm_hw_params_set_buffer_time_near(handle, params, &buffer_time, &dir); */
-  /* if (err < 0) { */
-  /*   printf("Unable to set buffer time %i for playback: %s\n", buffer_time, snd_strerror(err)); */
-  /*   return err; */
-  /* } */
-
-  err = snd_pcm_hw_params_set_buffer_size(handle, params, *buffer_size);
+  err = snd_pcm_hw_params_set_period_size_near(handle, params, period_size, 0);
   if (err < 0) {
-    printf("Unable to set buffer size for playback: %s\n", snd_strerror(err));
+    printf("Unable to set period size for playback: %s\n", snd_strerror(err));
     return err;
   }
 
-  /* set the period time */
-  /* err = snd_pcm_hw_params_set_period_time_near(handle, params, &period_time, &dir); */
-  /* if (err < 0) { */
-  /*   printf("Unable to set period time %i for playback: %s\n", period_time, snd_strerror(err)); */
-  /*   return err; */
-  /* } */
-  err = snd_pcm_hw_params_set_period_size(handle, params, *period_size, 0);
+  *buffer_size = 2 * (*period_size);
+  err = snd_pcm_hw_params_set_buffer_size_near(handle, params, buffer_size);
   if (err < 0) {
-    printf("Unable to get period size for playback: %s\n", snd_strerror(err));
+    printf("Unable to set buffer size for playback: %s\r\n", snd_strerror(err));
     return err;
   }
 
@@ -171,7 +156,8 @@ static ERL_NIF_TERM pcm_dump(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
 
 static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  unsigned int ret, channels, rate;
+  unsigned int channels, rate;
+  int ret;
   snd_pcm_uframes_t buffer_size, period_size; // ulong
   snd_pcm_t** handle_p;
 

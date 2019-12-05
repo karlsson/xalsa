@@ -1,74 +1,38 @@
-# Based on c_src.mk from erlang.mk by Loic Hoguin <essen@ninenines.eu>
+# Based on Makefile from https://github.com/ConnorRigby/hello_calendar
 
-CURDIR := $(shell pwd)
-BASEDIR := $(abspath $(CURDIR)/..)
-
-PROJECT ?= $(notdir $(BASEDIR))
-PROJECT := $(strip $(PROJECT))
-
-ERTS_INCLUDE_DIR ?= $(shell erl -noshell -s init stop -eval "io:format(\"~ts/erts-~ts/include/\", [code:root_dir(), erlang:system_info(version)]).")
-ERL_INTERFACE_INCLUDE_DIR ?= $(shell erl -noshell -s init stop -eval "io:format(\"~ts\", [code:lib_dir(erl_interface, include)]).")
-ERL_INTERFACE_LIB_DIR ?= $(shell erl -noshell -s init stop -eval "io:format(\"~ts\", [code:lib_dir(erl_interface, lib)]).")
-
-C_SRC_DIR = $(CURDIR)
-C_SRC_OUTPUT ?= $(CURDIR)/../priv/$(PROJECT).so
-
-# System type and C compiler/flags.
-
-UNAME_SYS := $(shell uname -s)
-ifeq ($(UNAME_SYS), Darwin)
-	CC ?= cc
-	CFLAGS ?= -O3 -std=c99 -arch x86_64 -finline-functions -Wall -Wmissing-prototypes
-	CXXFLAGS ?= -O3 -arch x86_64 -finline-functions -Wall
-	LDFLAGS ?= -arch x86_64 -flat_namespace -undefined suppress
-else ifeq ($(UNAME_SYS), FreeBSD)
-	CC ?= cc
-	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wmissing-prototypes
-	CXXFLAGS ?= -O3 -finline-functions -Wall
-else ifeq ($(UNAME_SYS), Linux)
-	CC ?= gcc
-	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wmissing-prototypes
-	CXXFLAGS ?= -O3 -finline-functions -Wall
+ifeq ($(ERL_EI_INCLUDE_DIR),)
+ERL_ROOT_DIR = $(shell erl -eval "io:format(\"~s~n\", [code:root_dir()])" -s init stop -noshell)
+ifeq ($(ERL_ROOT_DIR),)
+   $(error Could not find the Erlang installation. Check to see that 'erl' is in your PATH)
+endif
+ERL_EI_INCLUDE_DIR = $(ERL_ROOT_DIR)/usr/include
+ERL_EI_LIBDIR = $(ERL_ROOT_DIR)/usr/lib
 endif
 
-CFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
-CXXFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
+# Set Erlang-specific compile and linker flags
+ERL_CFLAGS ?= -I$(ERL_EI_INCLUDE_DIR)
+ERL_LDLIBS ?= -L$(ERL_EI_LIBDIR)
+LDLIBS += -lasound
 
-LDLIBS += -L $(ERL_INTERFACE_LIB_DIR) -lei -lasound -lerl_interface
+CFLAGS ?= -fpic -O3 -Wall -Wextra -finline-functions
+CFLAGS += -Wmissing-prototypes -Wno-unused-parameter -Wno-missing-field-initializers
 LDFLAGS += -shared
 
-# Verbosity.
+ifeq ($(CROSSCOMPILE),)
+ifeq ($(shell uname),Darwin)
+LDFLAGS += -undefined dynamic_lookup
+endif
+endif
 
-c_verbose_0 = @echo " C     " $(?F);
-c_verbose = $(c_verbose_$(V))
+NIF=../priv/xalsa.so
 
-cpp_verbose_0 = @echo " CPP   " $(?F);
-cpp_verbose = $(cpp_verbose_$(V))
+all: ../priv $(NIF)
 
-link_verbose_0 = @echo " LD    " $(@F);
-link_verbose = $(link_verbose_$(V))
+../priv:
+	@mkdir -p ../priv
 
-SOURCES := $(shell find $(C_SRC_DIR) -type f \( -name "*.c" -o -name "*.C" -o -name "*.cc" -o -name "*.cpp" \))
-OBJECTS = $(addsuffix .o, $(basename $(SOURCES)))
-
-COMPILE_C = $(c_verbose) $(CC) $(CFLAGS) $(CPPFLAGS) -c
-COMPILE_CPP = $(cpp_verbose) $(CXX) $(CXXFLAGS) $(CPPFLAGS) -c
-
-$(C_SRC_OUTPUT): $(OBJECTS)
-	@mkdir -p $(BASEDIR)/priv/
-	$(link_verbose) $(CC) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $(C_SRC_OUTPUT)
-
-%.o: %.c
-	$(COMPILE_C) $(OUTPUT_OPTION) $<
-
-%.o: %.cc
-	$(COMPILE_CPP) $(OUTPUT_OPTION) $<
-
-%.o: %.C
-	$(COMPILE_CPP) $(OUTPUT_OPTION) $<
-
-%.o: %.cpp
-	$(COMPILE_CPP) $(OUTPUT_OPTION) $<
+$(NIF): xalsa_nif.c
+	$(CC) $(ERL_CFLAGS) $(CFLAGS) $< $(LDFLAGS) $(ERL_LDLIBS) $(LDLIBS) -o $@
 
 clean:
-	@rm -f $(C_SRC_OUTPUT) $(OBJECTS)
+	@rm -f $(NIF)

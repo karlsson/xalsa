@@ -46,7 +46,12 @@ load_nifs() ->
         Dir ->
             filename:join(Dir, ?LIBNAME)
     end,
-    erlang:load_nif(SoName, 0).
+    case erlang:load_nif(SoName, 0) of
+        ok -> ok;
+        {error, {reload, _}} -> ok;
+        {error, Reason} ->
+            logger:warning("Failed to load NIF: ~p : ~p",[?MODULE, Reason])
+    end.
 
 not_loaded(Line) ->
     exit({not_loaded, [{module, ?MODULE}, {line, Line}]}).

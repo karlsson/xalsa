@@ -30,7 +30,7 @@
 -define(SERVER, ?MODULE).
 
 -type rate() :: 44100 | 48000 | 96000 | 192000.
--type period_size() :: 224 | 240 | 480 | 960.
+-type period_size() :: 256 | 512 | 1024.
 
 -record(state, {
 		conf_rate :: rate(),
@@ -102,10 +102,10 @@ init([]) ->
     %% (or even 64). Current setting gives a time of 5 ms.
     PeriodSize =
 	case Rate of
-	    44100 -> 224;
-	    48000 -> 240;
-	    96000 -> 480;
-	    192000-> 960
+	    44100 -> 256;
+	    48000 -> 256;
+	    96000 -> 512;
+	    192000-> 1024
 	end,
     {ok, #state{conf_rate = Rate, period_size = PeriodSize}, {continue,[]}}.
 

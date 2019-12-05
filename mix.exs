@@ -1,24 +1,15 @@
-defmodule Mix.Tasks.Compile.XalsaNif do
-  def run(_args) do
-    {result, _errcode} = System.cmd("make", [], cd: "c_src", stderr_to_stdout: true)
-    Mix.Project.build_structure()
-    IO.binwrite(result)
-  end
-
-  def clean() do
-    {result, _errcode} = System.cmd("make", ["clean"], cd: "c_src", stderr_to_stdout: true)
-    IO.binwrite(result)
-  end
-end
-
 defmodule Xalsa.MixProject do
   use Mix.Project
+
+  @target System.get_env("MIX_TARGET") || "host"
 
   def project do
     [
       app: :xalsa,
-      compilers: [:xalsa_nif] ++ Mix.compilers(),
-      version: "0.2.0",
+      make_cwd: "c_src",
+      make_clean: ["clean"],
+      compilers: [:elixir_make] ++ Mix.compilers(),
+      version: "0.2.1",
       elixir: "~> 1.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -41,14 +32,15 @@ defmodule Xalsa.MixProject do
       mod: {:xalsa_app, []},
       env: [
 	rate: 44100,
-	pcms: ["plughw:PCH,0": 2]
-      ],
+	pcms: pcms(@target)
+      ]
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:elixir_make, "~> 0.6", runtime: false},
       {:ex_doc, "~> 0.20.2", only: :dev, runtime: false}
     ]
   end
@@ -64,4 +56,8 @@ defmodule Xalsa.MixProject do
       links: %{"GitHub" => "https://github.com/karlsson/xalsa"}
     ]
   end
+
+  defp pcms("host"), do: ["plughw:PCH,0": 2]
+  defp pcms(_rpi), do: ["plughw:0": 2]
+
 end

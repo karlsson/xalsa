@@ -71,15 +71,15 @@ init(#{name := AtomName, rate := Rate,
     Handle = xalsa_pcm:open_handle(Name),
     Conf = xalsa_pcm:set_params(Handle, Channels, Rate, PeriodSize),
     logger:info("~p - opened device ~p rate: ~p channels: ~p",[?MODULE, AtomName, Rate, Channels]),
-    {Rate, Channels, BufferSize, PeriodSize} = Conf,
-    PeriodTime = round(PeriodSize * 1000 / Rate),
+    {Rate, Channels, BufferSize1, PeriodSize1} = Conf,
+    PeriodTime = round(PeriodSize1 * 1000 / Rate),
     Bufs = erlang:make_tuple(Channels, #{}),
     {ok,
      #state{name = AtomName, handle = Handle,
             rate = Rate, no_of_channels = Channels,
-            buffer_size = BufferSize, period_size = PeriodSize,
+            buffer_size = BufferSize1, period_size = PeriodSize1,
             period_time = PeriodTime, buffers = Bufs},
-     {continue, {Handle, PeriodSize}}}.
+     {continue, {Handle, PeriodSize1}}}.
 
 %%--------------------------------------------------------------------
 %% @private
