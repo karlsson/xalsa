@@ -2,7 +2,7 @@
 -export([open_handle/1,
 	 close_handle/1,
 	 dump/1,
-	 set_params/4,
+	 set_params/5,
 	 writei/3,
 	 writen/3,
 	 prepare/1,
@@ -23,7 +23,7 @@
 open_handle(_Device) -> not_loaded(?LINE).
 close_handle(_Handle) -> not_loaded(?LINE).
 dump(_Handle) -> not_loaded(?LINE).
-set_params(_Handle, _Channels, _Rate, _PeriodSize) -> not_loaded(?LINE).
+set_params(_Handle, _Channels, _Rate, _PeriodSize, _BufferPeriodSizeRatio) -> not_loaded(?LINE).
 writei(_Handle, _PeriodBin, _NoOfFrames) -> not_loaded(?LINE).
 writen(_Handle, _PeriodBinList, _NoOfFrames) -> not_loaded(?LINE).
 prepare(_Handle) -> not_loaded(?LINE).

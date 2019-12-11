@@ -27,8 +27,10 @@ use Mix.Config
 # get 3 and 4.
 #
 # config :xalsa,
-#   rate: 98000,
-#   pcms: ["plughw:PCH,0": 2, "plughw:HDMI,3": 2]
+#   rate: 44100,
+#   pcms: [{:"plughw:PCH,0",
+#           [channels: 2, period_size: 256, period_buffer_size_ratio: 2]},
+#          {:"plughw:HDMI,3", [channels: 2]}]
 
 # You can also configure a third-party app:
 #

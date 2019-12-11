@@ -172,7 +172,8 @@ handle_continue(_Continue, #state{channels = GlobalChannels,
 	    _ ->
 		GlobalChannels
 	end,
-    {noreply, State#state{channels = NewChs}}.
+    MaxPeriodSize = max_period_size(NewChs),
+    {noreply, State#state{channels = NewChs, period_size = MaxPeriodSize}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -231,11 +232,15 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-start_servers([{AtomName, NoChannels}|T], Rate, PeriodSize, GlobalChannels) ->
+start_servers([{AtomName, Pars}|T], Rate, PeriodSize, GlobalChannels) ->
+    NoChannels = proplists:get_value(channels, Pars, 2),
     {ok, _Pid} = xalsa_sup:start_xalsa_server(AtomName,
 					    #{rate => Rate,
-					      period_size => PeriodSize,
-					      no_of_channels => NoChannels}),
+					      period_size => proplists:get_value(period_size, Pars, PeriodSize),
+                                              no_of_channels => NoChannels,
+                                              buffer_period_size_ratio =>
+                                                  proplists:get_value(buffer_period_size_ratio, Pars, 2)
+                                             }),
     NewGlobalChannels = add_channel(GlobalChannels, {AtomName, NoChannels}),
     start_servers(T, Rate, PeriodSize, NewGlobalChannels);
 start_servers([], _, _, GlobalChannels) ->
@@ -261,6 +266,11 @@ sum_channels([{_, N0}|T], N) ->
     sum_channels(T, N + N0);
 sum_channels([],N) ->
     N.
+
+max_period_size([{Id,_}|T]) ->
+    max(gen_server:call(Id, period_size), max_period_size(T));
+max_period_size([]) ->
+    0.
 
 max_mix_time([{Id,_}|T]) ->
     [gen_server:call(Id,max_mix_time)|max_mix_time(T)];

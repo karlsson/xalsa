@@ -64,12 +64,15 @@ start_link(Name, Args) ->
                               {ok, State :: term(), hibernate} |
                               {stop, Reason :: term()} |
                               ignore.
-init(#{name := AtomName, rate := Rate,
-       no_of_channels := Channels, period_size := PeriodSize}) ->
+init(#{name := AtomName,
+       rate := Rate,
+       no_of_channels := Channels,
+       period_size := PeriodSize,
+       buffer_period_size_ratio := N}) ->
     process_flag(trap_exit, true),
     Name = atom_to_list(AtomName),
     Handle = xalsa_pcm:open_handle(Name),
-    Conf = xalsa_pcm:set_params(Handle, Channels, Rate, PeriodSize),
+    Conf = xalsa_pcm:set_params(Handle, Channels, Rate, PeriodSize, N),
     logger:info("~p - opened device ~p rate: ~p channels: ~p",[?MODULE, AtomName, Rate, Channels]),
     {Rate, Channels, BufferSize1, PeriodSize1} = Conf,
     PeriodTime = round(PeriodSize1 * 1000 / Rate),
@@ -79,7 +82,7 @@ init(#{name := AtomName, rate := Rate,
             rate = Rate, no_of_channels = Channels,
             buffer_size = BufferSize1, period_size = PeriodSize1,
             period_time = PeriodTime, buffers = Bufs},
-     {continue, {Handle, PeriodSize1}}}.
+     {continue, []}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -96,6 +99,8 @@ init(#{name := AtomName, rate := Rate,
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_call(period_size, _From, State) ->
+    {reply, State#state.period_size, State};
 handle_call(max_mix_time, _From, State) ->
     {reply, State#state.dtime, State};
 handle_call(max_map_size, _From, State) ->
@@ -133,13 +138,14 @@ handle_cast(_Request, State) ->
                              {noreply, NewState :: term(), Timeout :: timeout()} |
                              {noreply, NewState :: term(), hibernate} |
                              {stop, Reason :: term(), NewState :: term()}.
-handle_continue({Handle, PeriodSize}, State) ->
+handle_continue(_, State = #state{handle = Handle,
+                                  period_size = PeriodSize,
+                                  buffer_size = BufferSize}) ->
     process_flag(priority, high),
     0 = xalsa_pcm:add_async_handler(Handle, self()),
     0 = xalsa_pcm:prepare(Handle),
     {_NewBufs, Frames} = prepare_bufs(State),
-    xalsa_pcm:writen(Handle, Frames, PeriodSize),
-    xalsa_pcm:writen(Handle, Frames, PeriodSize),
+    fill_buffer(Handle, Frames, PeriodSize, BufferSize div PeriodSize),
     0 = xalsa_pcm:start(Handle),
     {noreply, State}.
 
@@ -156,7 +162,7 @@ handle_continue({Handle, PeriodSize}, State) ->
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(pcm_ready4write,
             State = #state{name = Name, handle = Handle, period_size = Size,
-                           period_time = PT, dtime = Dtime}) ->
+                           buffer_size = BufSize, period_time = PT, dtime = Dtime}) ->
     T1 = sysnow(),
     {NewBufs, Frames} = prepare_bufs(State),
     ErrNo = xalsa_pcm:writen(Handle, Frames, Size),
@@ -168,8 +174,7 @@ handle_info(pcm_ready4write,
         epipe ->
             logger:warning("~p - ~p epipe",[?MODULE, Name]),
             xalsa_pcm:recover(Handle, ErrNo),
-            xalsa_pcm:writen(Handle, Frames, Size),
-            xalsa_pcm:writen(Handle, Frames, Size);
+            fill_buffer(Handle, Frames, Size, BufSize div Size);
         A ->
             logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
     end,
@@ -200,13 +205,7 @@ handle_info(timeout, State = #state{handle = Handle, period_size = Size,
         if
             Avail >= Size ->
                 {NewBufs1, Frames} = prepare_bufs(State),
-                xalsa_pcm:writen(Handle, Frames, Size),
-                if
-                    Avail - Size >= Size ->
-                        xalsa_pcm:writen(Handle, Frames, Size);
-                    true ->
-                        ok
-                end,
+                fill_buffer(Handle, Frames, Size, Avail div Size),
                 NewBufs1;
             true ->
                 State#state.buffers
@@ -272,6 +271,11 @@ prepare_bufs(Channel, Size, Bufs, Channels, Acc) when Channel =< Channels ->
     prepare_bufs(Channel+1, Size, NewBufs, Channels, [Frames | Acc]);
 prepare_bufs(_, _, Bufs, _, Acc) ->
     {Bufs, lists:reverse(Acc)}.
+
+fill_buffer(Handle, Frames, PeriodSize, N) when N > 0->
+    xalsa_pcm:writen(Handle, Frames, PeriodSize),
+    fill_buffer(Handle, Frames, PeriodSize, N-1);
+fill_buffer(_, _, _, 0) -> ok.
 
 sysnow() ->
     %% microseconds past epoc

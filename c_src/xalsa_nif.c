@@ -24,7 +24,7 @@
 static ErlNifResourceType* res_type;
 
 static int set_hwparams(snd_pcm_t *handle,
-                        unsigned int *rate, unsigned int *channels,
+                        unsigned int *rate, unsigned int *channels, unsigned int n,
                         snd_pcm_uframes_t *buffer_size,
                         snd_pcm_uframes_t *period_size){
   int err;
@@ -81,7 +81,7 @@ static int set_hwparams(snd_pcm_t *handle,
     return err;
   }
 
-  *buffer_size = 2 * (*period_size);
+  *buffer_size = n * (*period_size);
   err = snd_pcm_hw_params_set_buffer_size_near(handle, params, buffer_size);
   if (err < 0) {
     printf("Unable to set buffer size for playback: %s\r\n", snd_strerror(err));
@@ -156,7 +156,7 @@ static ERL_NIF_TERM pcm_dump(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
 
 static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  unsigned int channels, rate;
+  unsigned int channels, rate, buffer_period_size_ratio;
   int ret;
   snd_pcm_uframes_t buffer_size, period_size; // ulong
   snd_pcm_t** handle_p;
@@ -173,10 +173,16 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
   if (!enif_get_ulong(env, argv[3], &period_size)) {
     return enif_make_badarg(env);
   }
+  if (!enif_get_uint(env, argv[4], &buffer_period_size_ratio)) {
+    return enif_make_badarg(env);
+  }
 
-  buffer_size = 2 * period_size;
+  buffer_size = buffer_period_size_ratio * period_size;
 
-  ret = set_hwparams(*handle_p, &rate, &channels, &buffer_size, &period_size);
+  ret = set_hwparams(*handle_p, &rate, &channels,
+                     buffer_period_size_ratio,
+                     &buffer_size,
+                     &period_size);
   if (ret < 0) {
     return enif_make_uint(env, ret);
   }
@@ -440,7 +446,7 @@ static ErlNifFunc nif_funcs[] = {
   {"open_handle", 1, pcm_open_handle, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"close_handle", 1, pcm_close_handle},
   {"dump", 1, pcm_dump, ERL_NIF_DIRTY_JOB_IO_BOUND},
-  {"set_params", 4, pcm_set_params, ERL_NIF_DIRTY_JOB_IO_BOUND},
+  {"set_params", 5, pcm_set_params, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"writei", 3, pcm_writei},
   {"writen", 3, pcm_writen},
   {"prepare", 1, pcm_prepare},
