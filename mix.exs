@@ -58,6 +58,6 @@ defmodule Xalsa.MixProject do
   end
 
   defp pcms("host"), do: ["plughw:PCH,0": [channels: 2]]
-  defp pcms(_rpi), do: ["plughw:0": [channels: 2, period_size: 512, period_buffer_size_ratio: 3]]
+  defp pcms(_rpi), do: ["hw:0,1": [channels: 2, period_size: 1024, buffer_period_size_ratio: 3]]
 
 end
