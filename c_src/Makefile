@@ -14,7 +14,7 @@ ERL_CFLAGS ?= -I$(ERL_EI_INCLUDE_DIR)
 ERL_LDLIBS ?= -L$(ERL_EI_LIBDIR)
 LDLIBS += -lasound
 
-CFLAGS ?= -fpic -O3 -Wall -Wextra -finline-functions
+CFLAGS ?= -fpic -std=c99 -O3 -Wall -Wextra -finline-functions
 CFLAGS += -Wmissing-prototypes -Wno-unused-parameter -Wno-missing-field-initializers
 LDFLAGS += -shared
 

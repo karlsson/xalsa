@@ -165,12 +165,12 @@ handle_info(pcm_ready4write,
                            buffer_size = BufSize, period_time = PT, dtime = Dtime}) ->
     T1 = sysnow(),
     {NewBufs, Frames} = prepare_bufs(State),
-    ErrNo = xalsa_pcm:writen(Handle, Frames, Size),
+    ErrNo = xalsa_pcm:writei(Handle, Frames, Size),
     case xalsa_pcm:errno(ErrNo) of
         Size ->
             ok;
         eagain ->
-            xalsa_pcm:writen(Handle, Frames, Size);
+            xalsa_pcm:writei(Handle, Frames, Size);
         epipe ->
             logger:warning("~p - ~p epipe",[?MODULE, Name]),
             xalsa_pcm:recover(Handle, ErrNo),
@@ -273,7 +273,7 @@ prepare_bufs(_, _, Bufs, _, Acc) ->
     {Bufs, lists:reverse(Acc)}.
 
 fill_buffer(Handle, Frames, PeriodSize, N) when N > 0->
-    xalsa_pcm:writen(Handle, Frames, PeriodSize),
+    xalsa_pcm:writei(Handle, Frames, PeriodSize),
     fill_buffer(Handle, Frames, PeriodSize, N-1);
 fill_buffer(_, _, _, 0) -> ok.
 

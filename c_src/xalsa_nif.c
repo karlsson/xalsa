@@ -1,25 +1,36 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdint.h>
 #include <erl_nif.h>
 #include <alsa/asoundlib.h>
 
-#define FRAME_TYPE float
-#define FRAME_SIZE sizeof(float)
+#define INT24_MAX  8388608
 
-#if FRAME_TYPE == float
+#define FRAME_TYPE _Float32
+#define FRAME_SIZE sizeof(FRAME_TYPE)
+
+static const snd_pcm_format_t formats[] = {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define NATIVE_FORMAT SND_PCM_FORMAT_FLOAT_LE
+  SND_PCM_FORMAT_FLOAT_LE,
+  SND_PCM_FORMAT_S32_LE,
+  SND_PCM_FORMAT_S24_LE,
+  SND_PCM_FORMAT_S16_LE
 #else
-#define NATIVE_FORMAT SND_PCM_FORMAT_FLOAT_BE
+  SND_PCM_FORMAT_FLOAT_BE,
+  SND_PCM_FORMAT_S32_BE,
+  SND_PCM_FORMAT_S24_BE,
+  SND_PCM_FORMAT_S16_BE
 #endif
-#else
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define NATIVE_FORMAT SND_PCM_FORMAT_FLOAT64_LE
-#else
-#define NATIVE_FORMAT SND_PCM_FORMAT_FLOAT64_BE
-#endif
-#endif
+};
+
+#define NUMFORMATS (sizeof(formats) / sizeof(formats[0]))
+
+typedef struct
+{
+  snd_pcm_t * handle;
+  unsigned int format_index;
+} xalsa_resource;
 
 static ErlNifResourceType* res_type;
 
@@ -51,17 +62,23 @@ static int set_hwparams(snd_pcm_t *handle,
     return err;
   }
   /* set the interleaved read/write format */
-  err = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_NONINTERLEAVED);
+  err = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
   if (err < 0) {
     printf("Access type not available for playback: %s\n", snd_strerror(err));
     return err;
   }
   /* set the sample format */
-  err = snd_pcm_hw_params_set_format(handle, params, NATIVE_FORMAT);
+  unsigned int format_index = 0;
+  while((err = snd_pcm_hw_params_set_format(handle, params, formats[format_index]) < 0) &&
+        format_index < NUMFORMATS) {
+    format_index++;
+  }
   if (err < 0) {
     printf("Sample format not available for playback: %s\n", snd_strerror(err));
     return err;
   }
+  printf("Sample format selected for playback: %i\n", format_index);
+
   /* set the count of channels */
   err = snd_pcm_hw_params_set_channels_near(handle, params, channels);
   if (err < 0) {
@@ -95,14 +112,15 @@ static int set_hwparams(snd_pcm_t *handle,
     printf("Unable to set hw params for playback: %s\n", snd_strerror(err));
     return err;
   }
-  return 0;
+  return format_index;
 }
 
 static ERL_NIF_TERM pcm_open_handle(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   char device[128];                     /* playback device */
   int err = 0;
-  snd_pcm_t** handle_p = enif_alloc_resource(res_type, sizeof(snd_pcm_t*));
+  xalsa_resource * unit = enif_alloc_resource(res_type, sizeof(xalsa_resource));
+  snd_pcm_t** handle_p = &unit->handle;
 
   // we read the erlang string (erlang list)
   if (!enif_get_string(env, argv[0], device, 128, ERL_NIF_LATIN1)) {
@@ -114,8 +132,8 @@ static ERL_NIF_TERM pcm_open_handle(ErlNifEnv* env, int argc, const ERL_NIF_TERM
     return enif_make_badarg(env);
   }
 
-  ERL_NIF_TERM term = enif_make_resource(env, handle_p);
-  enif_release_resource(handle_p);
+  ERL_NIF_TERM term = enif_make_resource(env, unit);
+  enif_release_resource(unit);
   return term;
 }
 
@@ -123,12 +141,12 @@ static ERL_NIF_TERM pcm_close_handle(ErlNifEnv* env, int argc, const ERL_NIF_TER
 {
   int ret;
 
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
 
-  ret = snd_pcm_close(*handle_p);
+  ret = snd_pcm_close(unit->handle);
   return enif_make_int(env, ret);
 }
 
@@ -138,8 +156,8 @@ static ERL_NIF_TERM pcm_dump(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
   snd_output_t *output = NULL;
   int err;
 
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
 
@@ -149,7 +167,7 @@ static ERL_NIF_TERM pcm_dump(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
     return -1;
   }
 
-  ret = snd_pcm_dump(*handle_p, output);
+  ret = snd_pcm_dump(unit->handle, output);
 
   return enif_make_int(env, ret);
 }
@@ -159,9 +177,9 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
   unsigned int channels, rate, buffer_period_size_ratio;
   int ret;
   snd_pcm_uframes_t buffer_size, period_size; // ulong
-  snd_pcm_t** handle_p;
 
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
   if (!enif_get_uint(env, argv[1], &channels)) {
@@ -179,21 +197,23 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
 
   buffer_size = buffer_period_size_ratio * period_size;
 
-  ret = set_hwparams(*handle_p, &rate, &channels,
+  ret = set_hwparams(unit->handle, &rate, &channels,
                      buffer_period_size_ratio,
                      &buffer_size,
                      &period_size);
   if (ret < 0) {
     return enif_make_uint(env, ret);
+  }else{
+    unit->format_index = ret;
   }
 
   snd_pcm_sw_params_t *sw_params;
   snd_pcm_sw_params_malloc(&sw_params);
-  snd_pcm_sw_params_current(*handle_p, sw_params);
-  snd_pcm_sw_params_set_start_threshold(*handle_p, sw_params,
+  snd_pcm_sw_params_current(unit->handle, sw_params);
+  snd_pcm_sw_params_set_start_threshold(unit->handle, sw_params,
                                         (buffer_size / period_size) * period_size - 1);
-  snd_pcm_sw_params_set_avail_min(*handle_p, sw_params, period_size);
-  snd_pcm_sw_params(*handle_p, sw_params);
+  snd_pcm_sw_params_set_avail_min(unit->handle, sw_params, period_size);
+  snd_pcm_sw_params(unit->handle, sw_params);
   snd_pcm_sw_params_free(sw_params);
 
   return enif_make_tuple4(env,
@@ -206,34 +226,13 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
 static ERL_NIF_TERM pcm_writei(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   ErlNifBinary bin;
+  ERL_NIF_TERM buf_list, head, tail;
   unsigned int size; // No of frames (per channel)
-  int err;
+  unsigned int i, channel, channels;
+  int err = 0;
 
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
-    return enif_make_badarg(env);
-  }
-  if (!enif_inspect_binary(env, argv[1], &bin)) {
-    return enif_make_badarg(env);
-  }
-  if (!enif_get_uint(env, argv[2], &size)) {
-    return enif_make_badarg(env);
-  }
-
-  err = snd_pcm_writei(*handle_p, bin.data, size);
-  return enif_make_int(env, err);
-}
-
-static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
-{
-  ErlNifBinary bin;
-  ERL_NIF_TERM buf_list;
-
-  unsigned int size; // No of frames (per channel)
-  unsigned int channels;
-  int err;
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
 
@@ -242,9 +241,108 @@ static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
     return enif_make_badarg(env);
   }
 
+  if (!enif_get_uint(env, argv[2], &size)) {
+    return enif_make_badarg(env);
+  }
+
   void** bufs = enif_alloc(sizeof(void*) * channels);
-  unsigned int channel = 0;
-  ERL_NIF_TERM head, tail;
+  for(channel = 0; channel < channels; channel++) {
+    if(!enif_get_list_cell(env, buf_list, &head, &tail)){
+      return enif_make_badarg(env);
+    }
+
+    if (!enif_inspect_binary(env, head, &bin)) {
+      return enif_make_badarg(env);
+    }
+
+    bufs[channel] = bin.data;
+    buf_list = tail;
+  }
+
+  int32_t * ip32;
+  int16_t * ip16;
+  FRAME_TYPE * fp32;
+  FRAME_TYPE max;
+  unsigned int y=0;
+  switch(unit->format_index) {
+  case 0:
+    fp32 = (FRAME_TYPE *) enif_alloc(FRAME_SIZE * channels * size);
+    for(i = 0; i < size; i ++){
+      for(channel = 0; channel < channels; channel++){
+        fp32[y++] = ((FRAME_TYPE *) bufs[channel])[i];
+      }
+    }
+    err = snd_pcm_writei(unit->handle, fp32, size);
+    enif_free(fp32);
+    break;
+  case 1:
+    ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * channels * size);
+    max = (FRAME_TYPE) INT32_MAX - 1;
+    for(i = 0; i < size; i++){
+      for(channel = 0; channel < channels; channel++){
+        ip32[y++] = (int32_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
+      }
+    }
+    err = snd_pcm_writei(unit->handle, ip32, size);
+    enif_free(ip32);
+    break;
+  case 2:
+    ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * channels * size);
+    max = (FRAME_TYPE) INT24_MAX - 1;
+    for(i = 0; i < size; i++){
+      for(channel = 0; channel < channels; channel++){
+        ip32[y++] = (int32_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
+      }
+    }
+    err = snd_pcm_writei(unit->handle, ip32, size);
+    enif_free(ip32);
+    break;
+  case 3:
+    ip16 = (int16_t *) enif_alloc(sizeof(int16_t) * channels * size);;
+    max = (FRAME_TYPE) INT16_MAX - 1;
+    for(i = 0; i < size; i++){
+      for(channel = 0; channel < channels; channel++){
+        ip16[y++] = (int16_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
+      }
+    }
+    err = snd_pcm_writei(unit->handle, ip16, size);
+    enif_free(ip16);
+    break;
+  }
+
+  enif_free(bufs);
+  return enif_make_int(env, err);
+}
+
+static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+  ErlNifBinary bin;
+  ERL_NIF_TERM buf_list, head, tail;
+
+  unsigned int size; // No of frames (per channel)
+  unsigned int channel, channels;
+  int err;
+
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
+    return enif_make_badarg(env);
+  }
+
+  buf_list = argv[1];
+  if(!enif_get_list_length(env, buf_list, &channels)){
+    return enif_make_badarg(env);
+  }
+
+  if (!enif_get_uint(env, argv[2], &size)) {
+    return enif_make_badarg(env);
+  }
+
+  void** bufs = enif_alloc(sizeof(void*) * channels);
+  channel = 0;
+  int32_t * ip32;
+  int16_t * ip16;
+  int max;
+  FRAME_TYPE * f;
   while(channel < channels){
     if(!enif_get_list_cell(env, buf_list, &head, &tail)){
       return enif_make_badarg(env);
@@ -252,38 +350,70 @@ static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
     if (!enif_inspect_binary(env, head, &bin)) {
       return enif_make_badarg(env);
     }
-    bufs[channel] = bin.data;
+    switch (unit->format_index) {
+    case 0:
+      bufs[channel] = bin.data;
+      break;
+    case 1:
+      ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * size);
+      f = ( FRAME_TYPE * ) bin.data;
+      max = INT32_MAX - 1;
+      for(unsigned int i = 0; i < size; i++){
+        ip32[i] = (int32_t) f[i] * max;
+      }
+      bufs[channel] = ip32;
+      break;
+    case 2:
+      ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * size);
+      f = ( FRAME_TYPE * ) bin.data;
+      max = INT24_MAX - 1;
+      for(unsigned int i = 0; i < size; i++){
+        ip32[i] = (int32_t) f[i] * max;
+      }
+      bufs[channel] = ip32;
+      break;
+    case 3:
+      ip16 = (int16_t *) enif_alloc(sizeof(int16_t) * size);;
+      f = ( FRAME_TYPE * ) bin.data;
+      max = INT16_MAX - 1;
+      for(unsigned int i = 0; i < size; i++){
+        ip16[i] = (int16_t) f[i] * max;
+      }
+      bufs[channel] = ip16;
+      break;
+    }
     channel++;
     buf_list = tail;
   }
 
-  if (!enif_get_uint(env, argv[2], &size)) {
-    return enif_make_badarg(env);
+  err = snd_pcm_writen(unit->handle, bufs, size);
+  if(unit->format_index > 0) {
+    for(channel = 0; channel < channels; channel++){
+      enif_free(bufs[channel]);
+    }
   }
-
-  err = snd_pcm_writen(*handle_p, bufs, size);
   enif_free(bufs);
   return enif_make_int(env, err);
 }
 
 static ERL_NIF_TERM pcm_prepare(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
-  return enif_make_int(env, snd_pcm_prepare(*handle_p));
+  return enif_make_int(env, snd_pcm_prepare(unit->handle));
 }
 
 static ERL_NIF_TERM pcm_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   int err = 0;
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void **) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
-  if (snd_pcm_state(*handle_p) == SND_PCM_STATE_PREPARED) {
-    err = snd_pcm_start(*handle_p);
+  if (snd_pcm_state(unit->handle) == SND_PCM_STATE_PREPARED) {
+    err = snd_pcm_start(unit->handle);
   }
 
   return enif_make_int(env, err);
@@ -292,24 +422,24 @@ static ERL_NIF_TERM pcm_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
 static ERL_NIF_TERM pcm_recover(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   int errno;
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void **) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
   if (!enif_get_int(env, argv[1], &errno)) {
     return enif_make_badarg(env);
   }
-  return enif_make_int(env, snd_pcm_recover(*handle_p, errno, 1));
+  return enif_make_int(env, snd_pcm_recover(unit->handle, errno, 1));
 }
 
 
 static ERL_NIF_TERM pcm_avail_update(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
-  return enif_make_int(env, snd_pcm_avail_update(*handle_p));
+  return enif_make_int(env, snd_pcm_avail_update(unit->handle));
 }
 
 /*   Callback handling - asynchronous notification */
@@ -328,15 +458,15 @@ static ERL_NIF_TERM pcm_add_async_handler(ErlNifEnv* env, int argc, const ERL_NI
 {
   snd_async_handler_t *ahandler;
   int err;
-  snd_pcm_t** handle_p;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &handle_p)){
+  xalsa_resource * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
   ErlNifPid* pid = (ErlNifPid*) enif_alloc(sizeof(ErlNifPid));
   if (!enif_get_local_pid(env, argv[1], pid)) {
     return enif_make_badarg(env);
   }
-  err = snd_async_add_pcm_handler(&ahandler, *handle_p, pcm_async_callback, pid);
+  err = snd_async_add_pcm_handler(&ahandler, unit->handle, pcm_async_callback, pid);
   return enif_make_int(env, err);
 }
 
