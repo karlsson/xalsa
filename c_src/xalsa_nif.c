@@ -30,11 +30,15 @@ typedef struct
 {
   snd_pcm_t * handle;
   unsigned int format_index;
-} xalsa_resource;
+  snd_pcm_access_t access;
+  unsigned int period_size;
+  unsigned int channels;
+  void** channel_bufs;
+} xalsa_t;
 
 static ErlNifResourceType* res_type;
 
-static int set_hwparams(snd_pcm_t *handle,
+static int set_hwparams(xalsa_t * unit,
                         unsigned int *rate, unsigned int *channels, unsigned int n,
                         snd_pcm_uframes_t *buffer_size,
                         snd_pcm_uframes_t *period_size){
@@ -47,6 +51,7 @@ static int set_hwparams(snd_pcm_t *handle,
      192000   1024
   */
   snd_pcm_hw_params_t *params;
+  snd_pcm_t *handle = unit->handle;
   snd_pcm_hw_params_malloc(&params);
   err = snd_pcm_hw_params_any(handle, params);
   if (err < 0) {
@@ -62,10 +67,16 @@ static int set_hwparams(snd_pcm_t *handle,
     return err;
   }
   /* set the interleaved read/write format */
-  err = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+  unit->access = SND_PCM_ACCESS_MMAP_NONINTERLEAVED;
+  err = snd_pcm_hw_params_set_access(handle, params, unit->access);
   if (err < 0) {
-    printf("Access type not available for playback: %s\n", snd_strerror(err));
-    return err;
+    unit->access = SND_PCM_ACCESS_MMAP_INTERLEAVED;
+    err = snd_pcm_hw_params_set_access(handle, params, unit->access);
+    if (err < 0) {
+      printf("Access type not available for playback: %s\n", snd_strerror(err));
+      return err;
+    }
+    printf("Interleaved access for playback\n");
   }
   /* set the sample format */
   unsigned int format_index = 0;
@@ -78,6 +89,7 @@ static int set_hwparams(snd_pcm_t *handle,
     return err;
   }
   printf("Sample format selected for playback: %i\n", format_index);
+  unit->format_index = format_index;
 
   /* set the count of channels */
   err = snd_pcm_hw_params_set_channels_near(handle, params, channels);
@@ -85,6 +97,8 @@ static int set_hwparams(snd_pcm_t *handle,
     printf("Channels count (%i) not available for playbacks: %s\n", *channels, snd_strerror(err));
     return err;
   }
+  unit->channels = *channels;
+
   /* set the stream rate */
   err = snd_pcm_hw_params_set_rate_near(handle, params, rate, 0);
   if (err < 0) {
@@ -97,6 +111,7 @@ static int set_hwparams(snd_pcm_t *handle,
     printf("Unable to set period size for playback: %s\n", snd_strerror(err));
     return err;
   }
+  unit->period_size = *period_size;
 
   *buffer_size = n * (*period_size);
   err = snd_pcm_hw_params_set_buffer_size_near(handle, params, buffer_size);
@@ -112,6 +127,12 @@ static int set_hwparams(snd_pcm_t *handle,
     printf("Unable to set hw params for playback: %s\n", snd_strerror(err));
     return err;
   }
+  /* Alloc channel buffers */
+  unit->channel_bufs = enif_alloc(sizeof(void*) * (*channels));
+
+  for(unsigned int channel = 0; channel < (*channels); channel++){
+    unit->channel_bufs[channel] = enif_alloc(FRAME_SIZE * (*period_size));
+  }
   return format_index;
 }
 
@@ -119,7 +140,7 @@ static ERL_NIF_TERM pcm_open_handle(ErlNifEnv* env, int argc, const ERL_NIF_TERM
 {
   char device[128];                     /* playback device */
   int err = 0;
-  xalsa_resource * unit = enif_alloc_resource(res_type, sizeof(xalsa_resource));
+  xalsa_t * unit = enif_alloc_resource(res_type, sizeof(xalsa_t));
   snd_pcm_t** handle_p = &unit->handle;
 
   // we read the erlang string (erlang list)
@@ -141,7 +162,7 @@ static ERL_NIF_TERM pcm_close_handle(ErlNifEnv* env, int argc, const ERL_NIF_TER
 {
   int ret;
 
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -156,7 +177,7 @@ static ERL_NIF_TERM pcm_dump(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
   snd_output_t *output = NULL;
   int err;
 
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -178,7 +199,7 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
   int ret;
   snd_pcm_uframes_t buffer_size, period_size; // ulong
 
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -197,7 +218,7 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
 
   buffer_size = buffer_period_size_ratio * period_size;
 
-  ret = set_hwparams(unit->handle, &rate, &channels,
+  ret = set_hwparams(unit, &rate, &channels,
                      buffer_period_size_ratio,
                      &buffer_size,
                      &period_size);
@@ -212,6 +233,7 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
   snd_pcm_sw_params_current(unit->handle, sw_params);
   snd_pcm_sw_params_set_start_threshold(unit->handle, sw_params,
                                         (buffer_size / period_size) * period_size - 1);
+  // snd_pcm_sw_params_set_start_threshold(unit->handle, sw_params, 0U);
   snd_pcm_sw_params_set_avail_min(unit->handle, sw_params, period_size);
   snd_pcm_sw_params(unit->handle, sw_params);
   snd_pcm_sw_params_free(sw_params);
@@ -223,182 +245,76 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
                           enif_make_ulong(env, period_size));
 }
 
-static ERL_NIF_TERM pcm_writei(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+/* This function covers both MMAP_INTERLEAVED and MMAP_NONINTERLEAVED cases */
+static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  ErlNifBinary bin;
-  ERL_NIF_TERM buf_list, head, tail;
   unsigned int size; // No of frames (per channel)
   unsigned int i, channel, channels;
   int err = 0;
+  const snd_pcm_channel_area_t *areas;
+  snd_pcm_uframes_t offset, frames;
+  snd_pcm_sframes_t avail;
 
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
+  channels = unit->channels;
+  frames = size = unit->period_size;
 
-  buf_list = argv[1];
-  if(!enif_get_list_length(env, buf_list, &channels)){
-    return enif_make_badarg(env);
+  avail = snd_pcm_avail_update(unit->handle);
+  if (avail < size) {
+    return enif_make_int(env, avail);
+  }
+  err = snd_pcm_mmap_begin(unit->handle, &areas, &offset, &frames);
+  if(err < 0){
+    printf("mmap begin error for playback:: %s\n", snd_strerror(err));
+    return enif_make_int(env, err);
   }
 
-  if (!enif_get_uint(env, argv[2], &size)) {
-    return enif_make_badarg(env);
-  }
-
-  void** bufs = enif_alloc(sizeof(void*) * channels);
-  for(channel = 0; channel < channels; channel++) {
-    if(!enif_get_list_cell(env, buf_list, &head, &tail)){
-      return enif_make_badarg(env);
-    }
-
-    if (!enif_inspect_binary(env, head, &bin)) {
-      return enif_make_badarg(env);
-    }
-
-    bufs[channel] = bin.data;
-    buf_list = tail;
-  }
-
-  int32_t * ip32;
-  int16_t * ip16;
-  FRAME_TYPE * fp32;
   FRAME_TYPE max;
-  unsigned int y=0;
-  switch(unit->format_index) {
-  case 0:
-    fp32 = (FRAME_TYPE *) enif_alloc(FRAME_SIZE * channels * size);
-    for(i = 0; i < size; i ++){
-      for(channel = 0; channel < channels; channel++){
-        fp32[y++] = ((FRAME_TYPE *) bufs[channel])[i];
-      }
-    }
-    err = snd_pcm_writei(unit->handle, fp32, size);
-    enif_free(fp32);
-    break;
-  case 1:
-    ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * channels * size);
-    max = (FRAME_TYPE) INT32_MAX - 1;
-    for(i = 0; i < size; i++){
-      for(channel = 0; channel < channels; channel++){
-        ip32[y++] = (int32_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
-      }
-    }
-    err = snd_pcm_writei(unit->handle, ip32, size);
-    enif_free(ip32);
-    break;
-  case 2:
-    ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * channels * size);
-    max = (FRAME_TYPE) INT24_MAX - 1;
-    for(i = 0; i < size; i++){
-      for(channel = 0; channel < channels; channel++){
-        ip32[y++] = (int32_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
-      }
-    }
-    err = snd_pcm_writei(unit->handle, ip32, size);
-    enif_free(ip32);
-    break;
-  case 3:
-    ip16 = (int16_t *) enif_alloc(sizeof(int16_t) * channels * size);;
-    max = (FRAME_TYPE) INT16_MAX - 1;
-    for(i = 0; i < size; i++){
-      for(channel = 0; channel < channels; channel++){
-        ip16[y++] = (int16_t) (((FRAME_TYPE *) bufs[channel])[i] * max);
-      }
-    }
-    err = snd_pcm_writei(unit->handle, ip16, size);
-    enif_free(ip16);
-    break;
-  }
-
-  enif_free(bufs);
-  return enif_make_int(env, err);
-}
-
-static ERL_NIF_TERM pcm_writen(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
-{
-  ErlNifBinary bin;
-  ERL_NIF_TERM buf_list, head, tail;
-
-  unsigned int size; // No of frames (per channel)
-  unsigned int channel, channels;
-  int err;
-
-  xalsa_resource * unit;
-  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
-    return enif_make_badarg(env);
-  }
-
-  buf_list = argv[1];
-  if(!enif_get_list_length(env, buf_list, &channels)){
-    return enif_make_badarg(env);
-  }
-
-  if (!enif_get_uint(env, argv[2], &size)) {
-    return enif_make_badarg(env);
-  }
-
-  void** bufs = enif_alloc(sizeof(void*) * channels);
-  channel = 0;
-  int32_t * ip32;
-  int16_t * ip16;
-  int max;
+  unsigned int step;
+  unsigned char * mmapp;
   FRAME_TYPE * f;
-  while(channel < channels){
-    if(!enif_get_list_cell(env, buf_list, &head, &tail)){
-      return enif_make_badarg(env);
-    }
-    if (!enif_inspect_binary(env, head, &bin)) {
-      return enif_make_badarg(env);
-    }
-    switch (unit->format_index) {
+  for(channel = 0; channel < channels; channel++){
+    f = (FRAME_TYPE *) unit->channel_bufs[channel];
+    step = areas[channel].step / 8;
+    mmapp = (((unsigned char *)areas[channel].addr) + (areas[channel].first / 8));
+    mmapp += (unsigned int) (offset * step);
+    switch(unit->format_index) {
     case 0:
-      bufs[channel] = bin.data;
+      for(i = 0; i < frames; i ++){
+        *((FRAME_TYPE *) mmapp) = f[i];
+        mmapp += step;
+      }
       break;
     case 1:
-      ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * size);
-      f = ( FRAME_TYPE * ) bin.data;
-      max = INT32_MAX - 1;
-      for(unsigned int i = 0; i < size; i++){
-        ip32[i] = (int32_t) f[i] * max;
-      }
-      bufs[channel] = ip32;
-      break;
     case 2:
-      ip32 = (int32_t *) enif_alloc(sizeof(int32_t) * size);
-      f = ( FRAME_TYPE * ) bin.data;
-      max = INT24_MAX - 1;
-      for(unsigned int i = 0; i < size; i++){
-        ip32[i] = (int32_t) f[i] * max;
+      max = (FRAME_TYPE)((unit->format_index == 1)?(INT32_MAX - 1):(INT24_MAX - 1));
+      for(i = 0; i < size; i++){
+        *((int32_t *) mmapp) = (int32_t) (f[i] * max);
+        mmapp += step;
       }
-      bufs[channel] = ip32;
       break;
     case 3:
-      ip16 = (int16_t *) enif_alloc(sizeof(int16_t) * size);;
-      f = ( FRAME_TYPE * ) bin.data;
-      max = INT16_MAX - 1;
-      for(unsigned int i = 0; i < size; i++){
-        ip16[i] = (int16_t) f[i] * max;
+      max = (FRAME_TYPE) INT16_MAX - 1;
+      for(i = 0; i < size; i++){
+        *((int16_t *) mmapp) = (int16_t) (f[i] * max);
+        mmapp += step;
       }
-      bufs[channel] = ip16;
       break;
     }
-    channel++;
-    buf_list = tail;
   }
-
-  err = snd_pcm_writen(unit->handle, bufs, size);
-  if(unit->format_index > 0) {
-    for(channel = 0; channel < channels; channel++){
-      enif_free(bufs[channel]);
-    }
+  err = snd_pcm_mmap_commit(unit->handle, offset, frames);
+  if(err < 0){
+    printf("mmap commit error for playback:: %s\n", snd_strerror(err));
   }
-  enif_free(bufs);
   return enif_make_int(env, err);
 }
 
 static ERL_NIF_TERM pcm_prepare(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -408,7 +324,7 @@ static ERL_NIF_TERM pcm_prepare(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
 static ERL_NIF_TERM pcm_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   int err = 0;
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -422,7 +338,7 @@ static ERL_NIF_TERM pcm_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
 static ERL_NIF_TERM pcm_recover(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
   int errno;
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -435,7 +351,7 @@ static ERL_NIF_TERM pcm_recover(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
 
 static ERL_NIF_TERM pcm_avail_update(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -458,7 +374,7 @@ static ERL_NIF_TERM pcm_add_async_handler(ErlNifEnv* env, int argc, const ERL_NI
 {
   snd_async_handler_t *ahandler;
   int err;
-  xalsa_resource * unit;
+  xalsa_t * unit;
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
@@ -473,80 +389,93 @@ static ERL_NIF_TERM pcm_add_async_handler(ErlNifEnv* env, int argc, const ERL_NI
 static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]){
   unsigned int i, size; // No of frames
   ERL_NIF_TERM key, value, map_out;
-  const ERL_NIF_TERM * tuple_array;
+  const ERL_NIF_TERM * tuple_array, * channel_array;
+  ERL_NIF_TERM out_array[16]; // Max 16 channels per card
+  unsigned int channel_arity;
   ErlNifMapIterator iter;
   ErlNifBinary bin;
 
-  if (!enif_map_iterator_create(env, argv[0], &iter, ERL_NIF_MAP_ITERATOR_FIRST)) {
+  xalsa_t * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
 
-  if (!enif_get_uint(env, argv[1], &size)) {
+  if (
+      !enif_get_tuple(env, argv[1], (int *) &channel_arity, &channel_array) ||
+      channel_arity != unit->channels) {
     return enif_make_badarg(env);
   }
 
+  size = unit->period_size;
   unsigned int bytesize = size * FRAME_SIZE;
 
-  ERL_NIF_TERM buf_term;
-  FRAME_TYPE *buf = (FRAME_TYPE *) enif_make_new_binary(env, bytesize, &buf_term);
-
-  for(i = 0; i < size; i++)
-    buf[i] = 0.0;
-
-  map_out = enif_make_new_map(env);
-
-  FRAME_TYPE* framesp;
-  unsigned int noframes;
-  int arity, notify_flag;
-  ERL_NIF_TERM new_binary;
-  while (enif_map_iterator_get_pair(env, &iter, &key, &value)) {
-    if(!(enif_get_tuple(env, value, &arity, &tuple_array) &&
-	 enif_get_int(env, tuple_array[0], &notify_flag) &&
-	 enif_inspect_binary(env, tuple_array[1], &bin))) {
-      return enif_make_badarg(env);
-    }
-    framesp = (FRAME_TYPE *) bin.data;
-    noframes = (bin.size / FRAME_SIZE);
-    for(i = 0; (i < size) && (i < noframes); i++){
-      buf[i] += framesp[i];
-    }
-
-    if(i < noframes) { // bin.data larger than size
-      unsigned int newsize = bin.size - bytesize;
-      if(notify_flag && newsize <= bytesize){
-	ErlNifPid pid;
-	if(enif_get_local_pid(env, key, &pid)) {
-	  ErlNifEnv* msg_env = enif_alloc_env();
-	  enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
-	  enif_free_env(msg_env);
-	}
-        notify_flag = 0;
+  for (unsigned int channel = 0; channel < unit->channels; channel++) {
+    if (!enif_map_iterator_create(env, channel_array[channel],
+                                  &iter, ERL_NIF_MAP_ITERATOR_FIRST))
+      {
+        return enif_make_badarg(env);
       }
-      new_binary =
-	enif_make_sub_binary(env,
-			     tuple_array[1],
-			     bytesize,
-			     newsize);
 
-      // insert it into the map along with its label converted as atom
-      enif_make_map_put(env, map_out,
-			key,
-			enif_make_tuple2(env, enif_make_int(env, notify_flag), new_binary),
-			&map_out);
-    } else if(notify_flag){
-      ErlNifPid pid;
-      if(enif_get_local_pid(env, key, &pid)) {
-        ErlNifEnv* msg_env = enif_alloc_env();
-        enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
-        enif_free_env(msg_env);
+    FRAME_TYPE *buf = (FRAME_TYPE *) unit->channel_bufs[channel];
+
+    for(i = 0; i < size; i++)
+      buf[i] = 0.0;
+
+    map_out = enif_make_new_map(env);
+
+    FRAME_TYPE* framesp;
+    unsigned int noframes;
+    int arity, notify_flag;
+    ERL_NIF_TERM new_binary;
+    while (enif_map_iterator_get_pair(env, &iter, &key, &value)) {
+      if(!(enif_get_tuple(env, value, &arity, &tuple_array) &&
+           enif_get_int(env, tuple_array[0], &notify_flag) &&
+           enif_inspect_binary(env, tuple_array[1], &bin))) {
+        return enif_make_badarg(env);
       }
+      framesp = (FRAME_TYPE *) bin.data;
+      noframes = (bin.size / FRAME_SIZE);
+      for(i = 0; (i < size) && (i < noframes); i++){
+        buf[i] += framesp[i];
+      }
+
+      if(i < noframes) { // bin.data larger than size
+        unsigned int newsize = bin.size - bytesize;
+        if(notify_flag && newsize <= bytesize){
+          ErlNifPid pid;
+          if(enif_get_local_pid(env, key, &pid)) {
+            ErlNifEnv* msg_env = enif_alloc_env();
+            enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
+            enif_free_env(msg_env);
+          }
+          notify_flag = 0;
+        }
+        new_binary =
+          enif_make_sub_binary(env,
+                               tuple_array[1],
+                               bytesize,
+                               newsize);
+
+        // insert it into the map along with its label converted as atom
+        enif_make_map_put(env, map_out,
+                          key,
+                          enif_make_tuple2(env, enif_make_int(env, notify_flag), new_binary),
+                          &map_out);
+      } else if(notify_flag){
+        ErlNifPid pid;
+        if(enif_get_local_pid(env, key, &pid)) {
+          ErlNifEnv* msg_env = enif_alloc_env();
+          enif_send(env, &pid, msg_env, enif_make_atom(msg_env, "ready4more"));
+          enif_free_env(msg_env);
+        }
+      }
+      enif_map_iterator_next(env, &iter);
     }
-    enif_map_iterator_next(env, &iter);
+
+    enif_map_iterator_destroy(env, &iter);
+    out_array[channel] = map_out;
   }
-
-  enif_map_iterator_destroy(env, &iter);
-
-  return enif_make_tuple2(env, buf_term, map_out);
+  return enif_make_tuple_from_array(env, out_array, unit->channels);
 }
 
 static ERL_NIF_TERM float_list_to_binary(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]){
@@ -577,8 +506,7 @@ static ErlNifFunc nif_funcs[] = {
   {"close_handle", 1, pcm_close_handle},
   {"dump", 1, pcm_dump, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_params", 5, pcm_set_params, ERL_NIF_DIRTY_JOB_IO_BOUND},
-  {"writei", 3, pcm_writei},
-  {"writen", 3, pcm_writen},
+  {"write", 1, pcm_write},
   {"prepare", 1, pcm_prepare},
   {"start", 1, pcm_start},
   {"recover", 2, pcm_recover},
@@ -588,13 +516,22 @@ static ErlNifFunc nif_funcs[] = {
   {"float_list_to_binary", 1, float_list_to_binary}
 };
 
+// ErlNifResourceDtor
+static void pcm_resource_dtor(ErlNifEnv* env, void * obj){
+  xalsa_t * unit = (xalsa_t*) obj;
+  for(unsigned int channel = 0; channel < unit->channels; channel++){
+    enif_free(unit->channel_bufs[channel]);
+  }
+  enif_free(unit->channel_bufs);
+}
+
 static int open_pcm_resource_type(ErlNifEnv* env)
 {
   const char* mod = "xalsa_nif";
   const char* resource_type = "pcm";
   int flags = ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER;
   res_type = enif_open_resource_type(env, mod, resource_type,
-                                     NULL, flags, NULL);
+                                     pcm_resource_dtor, flags, NULL);
   return ((res_type == NULL) ? -1:0);
 }
 

@@ -144,8 +144,8 @@ handle_continue(_, State = #state{handle = Handle,
     process_flag(priority, high),
     0 = xalsa_pcm:add_async_handler(Handle, self()),
     0 = xalsa_pcm:prepare(Handle),
-    {_NewBufs, Frames} = prepare_bufs(State),
-    fill_buffer(Handle, Frames, PeriodSize, BufferSize div PeriodSize),
+    _NewBufs = prepare_bufs(State),
+    fill_buffer(Handle,  BufferSize div PeriodSize),
     0 = xalsa_pcm:start(Handle),
     {noreply, State}.
 
@@ -164,17 +164,19 @@ handle_info(pcm_ready4write,
             State = #state{name = Name, handle = Handle, period_size = Size,
                            buffer_size = BufSize, period_time = PT, dtime = Dtime}) ->
     T1 = sysnow(),
-    {NewBufs, Frames} = prepare_bufs(State),
-    ErrNo = xalsa_pcm:writei(Handle, Frames, Size),
+    NewBufs  = prepare_bufs(State),
+    ErrNo = xalsa_pcm:write(Handle),
     case xalsa_pcm:errno(ErrNo) of
         Size ->
             ok;
         eagain ->
-            xalsa_pcm:writei(Handle, Frames, Size);
+            logger:warning("~p - ~p eagain",[?MODULE, Name]),
+            xalsa_pcm:write(Handle);
         epipe ->
             logger:warning("~p - ~p epipe",[?MODULE, Name]),
-            xalsa_pcm:recover(Handle, ErrNo),
-            fill_buffer(Handle, Frames, Size, BufSize div Size);
+            xalsa_pcm:prepare(Handle),
+            fill_buffer(Handle, BufSize div Size),
+            xalsa_pcm:start(Handle);
         A ->
             logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
     end,
@@ -204,8 +206,8 @@ handle_info(timeout, State = #state{handle = Handle, period_size = Size,
     NewBufs =
         if
             Avail >= Size ->
-                {NewBufs1, Frames} = prepare_bufs(State),
-                fill_buffer(Handle, Frames, Size, Avail div Size),
+                NewBufs1 = prepare_bufs(State),
+                fill_buffer(Handle, Avail div Size),
                 NewBufs1;
             true ->
                 State#state.buffers
@@ -260,22 +262,20 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-prepare_bufs(#state{period_size = Size, no_of_channels = Channels,
+prepare_bufs(#state{period_size = Size, handle = Handle,
                     buffers = Bufs}) when Size > 0 ->
-    prepare_bufs(1, Size, Bufs, Channels, []).
+    xalsa_pcm:sum_map(Handle, Bufs).
 
-prepare_bufs(Channel, Size, Bufs, Channels, Acc) when Channel =< Channels ->
-    Buf = element(Channel, Bufs),
-    {Frames, NewBuf} = xalsa_pcm:sum_map(Buf, Size),
-    NewBufs = setelement(Channel, Bufs, NewBuf),
-    prepare_bufs(Channel+1, Size, NewBufs, Channels, [Frames | Acc]);
-prepare_bufs(_, _, Bufs, _, Acc) ->
-    {Bufs, lists:reverse(Acc)}.
-
-fill_buffer(Handle, Frames, PeriodSize, N) when N > 0->
-    xalsa_pcm:writei(Handle, Frames, PeriodSize),
-    fill_buffer(Handle, Frames, PeriodSize, N-1);
-fill_buffer(_, _, _, 0) -> ok.
+fill_buffer(Handle, N) when N > 0->
+    Errno = xalsa_pcm:write(Handle),
+    if
+        Errno < 0 ->
+            logger:warning("fillbuffer Errno: ~p", [Errno]);
+        true ->
+            ok
+    end,
+    fill_buffer(Handle, N-1);
+fill_buffer(_, 0) -> ok.
 
 sysnow() ->
     %% microseconds past epoc
