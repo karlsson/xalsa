@@ -9,6 +9,8 @@
          recover/2,
          avail_update/1,
          add_async_handler/2,
+         add_fd/1,
+         enable_ready4write/1,
          errno/1,
 	 sum_map/2,
 	 float_list_to_binary/1]).
@@ -28,6 +30,8 @@ start(_Handle) -> not_loaded(?LINE).
 recover(_Handle, _ErrNo) -> not_loaded(?LINE).
 avail_update(_Handle) -> not_loaded(?LINE).
 add_async_handler(_Handle, _Pid) -> not_loaded(?LINE).
+add_fd(_Handle) -> not_loaded(?LINE).
+enable_ready4write(_Handle) -> not_loaded(?LINE).
 sum_map(_Handle, _BufsTuple) -> not_loaded(?LINE).
 float_list_to_binary(_List) -> not_loaded(?LINE).
 

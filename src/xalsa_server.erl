@@ -142,11 +142,13 @@ handle_continue(_, State = #state{handle = Handle,
                                   period_size = PeriodSize,
                                   buffer_size = BufferSize}) ->
     process_flag(priority, high),
-    0 = xalsa_pcm:add_async_handler(Handle, self()),
+    %% 0 = xalsa_pcm:add_async_handler(Handle, self()),
+    _Fd = xalsa_pcm:add_fd(Handle),
     0 = xalsa_pcm:prepare(Handle),
     _NewBufs = prepare_bufs(State),
     fill_buffer(Handle,  BufferSize div PeriodSize),
     0 = xalsa_pcm:start(Handle),
+    true = (xalsa_pcm:enable_ready4write(Handle) >= 0),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -180,8 +182,9 @@ handle_info(pcm_ready4write,
         A ->
             logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
     end,
-    garbage_collect(),
+    %% garbage_collect(),
     T2 = sysnow(),
+    true = (xalsa_pcm:enable_ready4write(Handle) >= 0),
     {noreply, State#state{buffers = NewBufs, dtime = max(Dtime,T2 - T1)}, 4 * PT};
 
 handle_info({frames,{Pid, Channel, PidBuf, Notify}},
@@ -214,7 +217,8 @@ handle_info(timeout, State = #state{handle = Handle, period_size = Size,
         end,
     {noreply, State#state{buffers = NewBufs}, 4 * PT};
 
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    logger:warning("Unexpected message ~p",[?MODULE, Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------

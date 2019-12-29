@@ -5,7 +5,10 @@
 #include <erl_nif.h>
 #include <alsa/asoundlib.h>
 
-#define INT24_MAX  8388608
+#define INT24_MAX  8388607
+#define INT24_MIN  -8388607
+#define INT24_MAX_F  8388607.0f
+#define INT24_MIN_F  -8388607.0f
 
 #define FRAME_TYPE _Float32
 #define FRAME_SIZE sizeof(FRAME_TYPE)
@@ -33,7 +36,8 @@ typedef struct
   snd_pcm_access_t access;
   unsigned int period_size;
   unsigned int channels;
-  void** channel_bufs;
+  FRAME_TYPE** channel_bufs;
+  int fd;
 } xalsa_t;
 
 static ErlNifResourceType* res_type;
@@ -128,10 +132,11 @@ static int set_hwparams(xalsa_t * unit,
     return err;
   }
   /* Alloc channel buffers */
-  unit->channel_bufs = enif_alloc(sizeof(void*) * (*channels));
-
-  for(unsigned int channel = 0; channel < (*channels); channel++){
-    unit->channel_bufs[channel] = enif_alloc(FRAME_SIZE * (*period_size));
+  unit->channel_bufs = enif_alloc(sizeof(FRAME_TYPE*) * unit->channels);
+  if(unit->channel_bufs == NULL) return -1;
+  for(unsigned int channel = 0; channel < unit->channels; channel++){
+    unit->channel_bufs[channel] = enif_alloc(FRAME_SIZE * unit->period_size);
+    if(unit->channel_bufs[channel] == NULL) return -1;
   }
   return format_index;
 }
@@ -245,11 +250,14 @@ static ERL_NIF_TERM pcm_set_params(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
                           enif_make_ulong(env, period_size));
 }
 
+#define MAX(x,y) (((x)>(y)) ? (x) : (y))
+#define MIN(x,y) (((x)<(y)) ? (x) : (y))
+
 /* This function covers both MMAP_INTERLEAVED and MMAP_NONINTERLEAVED cases */
 static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-  unsigned int size; // No of frames (per channel)
-  unsigned int i, channel, channels;
+  unsigned int format_index, size; // No of frames (per channel)
+  unsigned int i, channel;
   int err = 0;
   const snd_pcm_channel_area_t *areas;
   snd_pcm_uframes_t offset, frames;
@@ -259,47 +267,63 @@ static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
   if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
     return enif_make_badarg(env);
   }
-  channels = unit->channels;
-  frames = size = unit->period_size;
+
+  size = unit->period_size;
+  format_index = unit->format_index;
 
   avail = snd_pcm_avail_update(unit->handle);
   if (avail < size) {
     return enif_make_int(env, avail);
   }
+
+  frames = size;
   err = snd_pcm_mmap_begin(unit->handle, &areas, &offset, &frames);
   if(err < 0){
-    printf("mmap begin error for playback:: %s\n", snd_strerror(err));
+    // printf("mmap begin error for playback:: %s\n", snd_strerror(err));
     return enif_make_int(env, err);
   }
-
+  if(frames != size) {
+    return enif_make_int(env, frames);
+  }
   FRAME_TYPE max;
   unsigned int step;
   unsigned char * mmapp;
   FRAME_TYPE * f;
-  for(channel = 0; channel < channels; channel++){
-    f = (FRAME_TYPE *) unit->channel_bufs[channel];
+  int32_t tmp32;
+  for(channel = 0; channel < unit->channels; channel++){
+    f = unit->channel_bufs[channel];
     step = areas[channel].step / 8;
     mmapp = (((unsigned char *)areas[channel].addr) + (areas[channel].first / 8));
-    mmapp += (unsigned int) (offset * step);
-    switch(unit->format_index) {
+    mmapp += offset * step;
+    switch(format_index) {
     case 0:
-      for(i = 0; i < frames; i ++){
-        *((FRAME_TYPE *) mmapp) = f[i];
+      for(i = 0; i < frames; i++){
+        *((FRAME_TYPE *) mmapp) = MAX(MIN(f[i], 1.0), -1.0);
         mmapp += step;
       }
       break;
     case 1:
     case 2:
-      max = (FRAME_TYPE)((unit->format_index == 1)?(INT32_MAX - 1):(INT24_MAX - 1));
-      for(i = 0; i < size; i++){
-        *((int32_t *) mmapp) = (int32_t) (f[i] * max);
+      max = INT24_MAX_F;
+      for(i = 0; i < frames; i++){
+        if(f[i] <= -1.0f)
+          tmp32 = INT24_MIN;
+        else if(f[i] >= 1.0f)
+          tmp32 = INT24_MAX;
+        else
+          tmp32 = (int32_t) (f[i] * max);
+
+        if(format_index == 1)
+          tmp32 = tmp32 << 8;
+
+        *((int32_t *) mmapp) = tmp32;
         mmapp += step;
       }
       break;
     case 3:
-      max = (FRAME_TYPE) INT16_MAX - 1;
-      for(i = 0; i < size; i++){
-        *((int16_t *) mmapp) = (int16_t) (f[i] * max);
+      max = (FRAME_TYPE) (INT16_MAX - 1);
+      for(i = 0; i < frames; i++){
+        *((int16_t *) mmapp) = (int16_t) (MAX(MIN(f[i], 1.0), -1.0) * max);
         mmapp += step;
       }
       break;
@@ -384,6 +408,50 @@ static ERL_NIF_TERM pcm_add_async_handler(ErlNifEnv* env, int argc, const ERL_NI
   }
   err = snd_async_add_pcm_handler(&ahandler, unit->handle, pcm_async_callback, pid);
   return enif_make_int(env, err);
+}
+
+static ERL_NIF_TERM pcm_add_fd(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+  struct pollfd *ufds;
+  int count, err;
+  xalsa_t * unit;
+
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
+    return enif_make_badarg(env);
+  }
+  count = snd_pcm_poll_descriptors_count(unit->handle);
+  if (count != 1) {
+    printf("Invalid poll descriptors count %i\n", count);
+    return enif_make_int(env, count);
+  }
+
+  ufds = enif_alloc(sizeof(struct pollfd) * (count + 2));
+  if ((err = snd_pcm_poll_descriptors(unit->handle, ufds, count)) < 0) {
+    printf("Unable to obtain poll descriptors for playback: %s\n", snd_strerror(err));
+    return enif_make_int(env, err);
+  }
+  unit->fd = ufds[0].fd;
+  enif_free(ufds);
+  return enif_make_int(env, unit->fd);
+}
+
+static ERL_NIF_TERM pcm_enable_ready4write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+  int rv;
+  xalsa_t * unit;
+  if (!enif_get_resource(env, argv[0], res_type, (void**) &unit)){
+    return enif_make_badarg(env);
+  }
+  rv = enif_select_write(env,
+                         (ErlNifEvent) unit->fd,
+                         unit, // void* obj,
+                         NULL,
+                         enif_make_atom(env, "pcm_ready4write"),
+                         NULL);
+  if( rv < 0 ) {
+    return enif_make_badarg(env);
+  }
+  return enif_make_int(env, rv);
 }
 
 static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]){
@@ -512,6 +580,8 @@ static ErlNifFunc nif_funcs[] = {
   {"recover", 2, pcm_recover},
   {"avail_update", 1, pcm_avail_update},
   {"add_async_handler", 2, pcm_add_async_handler},
+  {"add_fd", 1, pcm_add_fd},
+  {"enable_ready4write", 1, pcm_enable_ready4write},
   {"sum_map", 2, sum_map},
   {"float_list_to_binary", 1, float_list_to_binary}
 };
