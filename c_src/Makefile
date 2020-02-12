@@ -22,6 +22,9 @@ ifeq ($(CROSSCOMPILE),)
 ifeq ($(shell uname),Darwin)
 LDFLAGS += -undefined dynamic_lookup
 endif
+ifeq ($(shell uname -m),x86_64)
+CFLAGS += -mavx
+endif
 endif
 
 NIF=../priv/xalsa.so

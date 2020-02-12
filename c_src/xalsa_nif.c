@@ -4,13 +4,16 @@
 #include <stdint.h>
 #include <erl_nif.h>
 #include <alsa/asoundlib.h>
+#ifdef __AVX__
+#include <immintrin.h>
+#endif
 
 #define INT24_MAX  8388607
 #define INT24_MIN  -8388607
 #define INT24_MAX_F  8388607.0f
 #define INT24_MIN_F  -8388607.0f
 
-#define FRAME_TYPE _Float32
+#define FRAME_TYPE float
 #define FRAME_SIZE sizeof(FRAME_TYPE)
 
 static const snd_pcm_format_t formats[] = {
@@ -491,7 +494,7 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     map_out = enif_make_new_map(env);
 
-    FRAME_TYPE* framesp;
+    FRAME_TYPE * framesp, * z;
     unsigned int noframes;
     int arity, notify_flag;
     ERL_NIF_TERM new_binary;
@@ -502,10 +505,24 @@ static ERL_NIF_TERM sum_map(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
       }
       framesp = (FRAME_TYPE *) bin.data;
+      z = buf;
       noframes = (bin.size / FRAME_SIZE);
+#ifdef __AVX__
+#define AVXSTEP  sizeof(__m256) / FRAME_SIZE // 8
+      __m256 ax, ay, az;
+
+      for(i = 0; (i < size) && (i < noframes); i += AVXSTEP){
+        ax = _mm256_loadu_ps(framesp);
+        ay = _mm256_loadu_ps(z);
+        az = _mm256_add_ps(ax,ay);
+        _mm256_storeu_ps(z, az);
+        framesp += AVXSTEP; z += AVXSTEP;
+  }
+#else
       for(i = 0; (i < size) && (i < noframes); i++){
         buf[i] += framesp[i];
       }
+#endif
 
       if(i < noframes) { // bin.data larger than size
         unsigned int newsize = bin.size - bytesize;
