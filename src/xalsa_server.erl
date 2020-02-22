@@ -182,7 +182,7 @@ handle_info(pcm_ready4write,
         A ->
             logger:error("~p - Wrong Size, got ~p but expected ~p", [?MODULE, A,Size])
     end,
-    %% garbage_collect(),
+    garbage_collect(),
     T2 = sysnow(),
     true = (xalsa_pcm:enable_ready4write(Handle) >= 0),
     {noreply, State#state{buffers = NewBufs, dtime = max(Dtime,T2 - T1)}, 4 * PT};

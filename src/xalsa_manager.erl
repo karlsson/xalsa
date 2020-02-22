@@ -166,9 +166,14 @@ handle_continue(_Continue, #state{channels = GlobalChannels,
 				  conf_rate = Rate,
 				  period_size = PeriodSize} = State) ->
     NewChs =
-	case application:get_env(xalsa, pcms) of
+        case application:get_env(xalsa, pcms) of
 	    {ok, PCMS} ->
-		start_servers(PCMS, Rate, PeriodSize, GlobalChannels);
+                %% Realtime scheduling policy
+                case os:cmd("chrt -arp 10 " ++ os:getpid()) of
+                    [] -> logger:info("Xalsa - set OS realtime scheduling policy");
+                    _ -> logger:info("Xalsa - unable to set OS realtime scheduling policy")
+                end,
+                start_servers(PCMS, Rate, PeriodSize, GlobalChannels);
 	    _ ->
 		GlobalChannels
 	end,
