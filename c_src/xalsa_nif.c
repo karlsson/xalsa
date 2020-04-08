@@ -8,10 +8,15 @@
 #include <immintrin.h>
 #endif
 
-#define INT24_MAX  8388607
-#define INT24_MIN  -8388607
+#define INT24_MAX_I  8388607
+#define INT24_MIN_I  -8388607
 #define INT24_MAX_F  8388607.0f
 #define INT24_MIN_F  -8388607.0f
+
+#define INT16_MAX_I  32767
+#define INT16_MIN_I  -32767
+#define INT16_MAX_F  32767.0f
+#define INT16_MIN_F  -32767.0f
 
 #define FRAME_TYPE float
 #define FRAME_SIZE sizeof(FRAME_TYPE)
@@ -293,6 +298,8 @@ static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
   unsigned char * mmapp;
   FRAME_TYPE * f;
   int32_t tmp32;
+  int16_t tmp16;
+  FRAME_TYPE tmpf;
   for(channel = 0; channel < unit->channels; channel++){
     f = unit->channel_bufs[channel];
     step = areas[channel].step / 8;
@@ -310,9 +317,9 @@ static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
       max = INT24_MAX_F;
       for(i = 0; i < frames; i++){
         if(f[i] <= -1.0f)
-          tmp32 = INT24_MIN;
+          tmp32 = INT24_MIN_I;
         else if(f[i] >= 1.0f)
-          tmp32 = INT24_MAX;
+          tmp32 = INT24_MAX_I;
         else
           tmp32 = (int32_t) (f[i] * max);
 
@@ -324,9 +331,17 @@ static ERL_NIF_TERM pcm_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
       }
       break;
     case 3:
-      max = (FRAME_TYPE) (INT16_MAX - 1);
+      max = INT16_MAX_F;
       for(i = 0; i < frames; i++){
-        *((int16_t *) mmapp) = (int16_t) (MAX(MIN(f[i], 1.0), -1.0) * max);
+        tmpf = f[i];
+        if(tmpf <= -1.0f)
+          tmp16 = INT16_MIN_I;
+        else if(tmpf >= 1.0f)
+          tmp16 = INT16_MAX_I;
+        else
+          tmp16 = (int16_t) (tmpf * max);
+
+        *((int16_t *) mmapp) = tmp16;
         mmapp += step;
       }
       break;
