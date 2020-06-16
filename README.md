@@ -11,7 +11,7 @@ The idea is to create some base for experimenting with sound synthesis in Elixir
 
 ## What it is
 
-Sound card drivers are configured to do asynchronous calls around every 5 ms to the xalsa_server process which delivers the number of frames (PCM samples) to the device driver to keep the card busy for yet another round of 5 ms. The frames are sent to a ring buffer made of two frame buffers. While one is used for generating audio the other is filled from the xalsa server.
+Sound card drivers are configured to use poll descriptors that are used by enif_select_write function. The buffer sizes are set so that a ready4write message will be sent to the xalsa_server around every 6 ms which in turn delivers the number of frames (PCM samples) to the device driver to keep the card busy for yet another round of 6 ms. The frames are sent to a ring buffer made of two frame buffers. While one is used for generating audio the other is filled from the xalsa server.
 
 The xalsa_server queues samples on a per channel and process id basis, meaning that sample frames sent from one process to a specific channel will be queued behind existing frames from the same process if they exist (not yet consumed by the audio driver). Frames from other processes will be put in their own queue. Frames from the different queues will be mixed before delivered to the driver. This means every process may synthesize and sequence their own tone(s) independently.
 
@@ -19,7 +19,7 @@ The frames are to be in a binary array of 32 bit floats for the C api. The Xalsa
 
 ## Installation
 
-- If using from own application, append line: `{:xalsa, "~> 0.2.0"}` to
+- If using from own application, append line: `{:xalsa, "~> 0.3.0"}` to
 your dependency list.
 - else checkout from github.
 - mix deps.get
@@ -32,6 +32,23 @@ The [config/config.exs](https://github.com/karlsson/xalsa/blob/master/config/con
 Default setting of application environment is in mix.exs.
 
 **NOTE**: Other applications on Linux like Pulseaudio may compete with your sound driver resources. In this case consult the documentation for your Linux distribution. For some reason it just worked on my Kubuntu distro.
+
+### Realtime scheduling policy
+The xalsa_manager process will set up realtime scheduling policy for all the
+beam scheduler threads using the os command `chrt` if this is allowed for
+the user.
+To allow realtime scheduling policy SCHED_RR with chrt one needs a setup
+of group audio (or any other unique name) and user added to this:
+```
+  groupadd audio
+  usermod -a -G audio yourUserID
+```
+  and in /etc/security/limits.d/audio.conf:
+```
+  @audio   -  rtprio     95
+  @audio   -  memlock    unlimited
+```
+See also [JACK configuration](https://jackaudio.org/faq/linux_rt_config.html#1-editing-the-configuration-file)
 
 ## Running
 
@@ -48,8 +65,8 @@ So considering that the BEAM (Erlang VM) has good support for multicore and that
 
 Some things I wanted to find out:
 - How soft realtime Erlang can meet some hard realtime driver conditions.
-- How to decouple periodical sound card driver callbacks and distribute to many Erlang (Elixir) processes using processes and message passing. 
+- How to decouple periodical sound card driver callbacks and distribute to many cores using processes and message passing.
 - If NIFs are good when optimizing sound generation.
 - Check if an old Erlang programmer can learn and appreciate Elixir. Since Elixir is "the new kid in the block" I thought that any sound synthesis software would get more community attention if using Elixir instead of Erlang.
 
-Results sofar is that Xalsa can mixin frames from around 50 erlang processes before missing the buffer timeframe (5 ms) on an ordinary laptop at 44100 Hz sample rate. The SC server manages timeframes in the ms range and with far more (at least 10x) so called UGens. So Xalsa is quite a bit behind but if synthesis can be pushed up some layer and spread on more cores it may still be feasible. The intention is to test this in other applications using Xalsa. This will probably also answer how well Elixir plays in an Erlang wired brain.
+Results sofar is that Xalsa can mixin frames from around 50 erlang processes before missing the buffer timeframe (6 ms) on an ordinary laptop at 44100 Hz sample rate. The SC server manages timeframes in the ms range and with far more (at least 10x) so called UGens. So Xalsa is quite a bit behind but if synthesis can be pushed up some layer and spread on more cores it may still be feasible. The intention is to test this in other applications using Xalsa. This will probably also answer how well Elixir plays in an Erlang wired brain.

@@ -16,7 +16,7 @@ use Mix.Config
 #
 #     Application.get_env(:xalsa, :key)
 #
-# rate 44100 | 48000 | 96000 | 192000
+# rate 44100 | 48000 | 96000 | 192000   - default 44100
 # Configuring PCM devices can be tricky.
 # Use alsa commands aplay -l and aplay -L to find your sound cards and PCM
 # devices. Look for PCMs supporting
@@ -31,6 +31,18 @@ use Mix.Config
 #   pcms: [{:"plughw:PCH,0",
 #           [channels: 2, period_size: 256, period_buffer_size_ratio: 2]},
 #          {:"plughw:HDMI,3", [channels: 2]}]
+
+# Optional; channels, period_size, period_buffer_size_ratio
+
+# channels default: 2
+
+# period_size default as function of rate
+#  44100: 256
+#  48000: 256
+#  96000: 512
+# 192000: 1024
+
+# period_buffer_size_ratio default: 2
 
 # You can also configure a third-party app:
 #

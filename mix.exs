@@ -9,8 +9,8 @@ defmodule Xalsa.MixProject do
       make_cwd: "c_src",
       make_clean: ["clean"],
       compilers: [:elixir_make] ++ Mix.compilers(),
-      version: "0.2.1",
-      elixir: "~> 1.8",
+      version: "0.3.0",
+      elixir: "~> 1.9",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),
@@ -41,7 +41,7 @@ defmodule Xalsa.MixProject do
   defp deps do
     [
       {:elixir_make, "~> 0.6", runtime: false},
-      {:ex_doc, "~> 0.20.2", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.22.1", only: :dev, runtime: false}
     ]
   end
 
