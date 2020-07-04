@@ -72,7 +72,8 @@ max_map_size() ->
 clear_max_map_size() ->
     gen_server:call(?SERVER, ?FUNCTION_NAME).
 get_id(Channel) ->
-    gen_server:call(?SERVER, {?FUNCTION_NAME, Channel}).
+    persistent_term:get({?SERVER, Channel}).
+    %% gen_server:call(?SERVER, {?FUNCTION_NAME, Channel}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -178,6 +179,7 @@ handle_continue(_Continue, #state{channels = GlobalChannels,
 		GlobalChannels
 	end,
     MaxPeriodSize = max_period_size(NewChs),
+    prepare_term_storage(NewChs),
     {noreply, State#state{channels = NewChs, period_size = MaxPeriodSize}}.
 
 %%--------------------------------------------------------------------
@@ -297,4 +299,15 @@ clear_max_map_size([{Id,_}|T]) ->
     gen_server:call(Id,clear_max_map_size),
     clear_max_map_size(T);
 clear_max_map_size([]) ->
+    ok.
+
+
+prepare_term_storage([]) -> ok;
+prepare_term_storage(Chs) ->
+    prepare_term_storage(Chs, 1, sum_channels(Chs)).
+
+prepare_term_storage(Chs, N, MAX) when N =< MAX ->
+    persistent_term:put({?SERVER, N}, get_local_id_channel(N, Chs)),
+    prepare_term_storage(Chs, N+1, MAX);
+prepare_term_storage(_, _, _) ->
     ok.
